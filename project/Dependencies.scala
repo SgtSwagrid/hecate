@@ -5,8 +5,8 @@ object Dependencies:
 
   object V:
 
-    val tapir           = "1.13.32"
-    val circe           = "0.14.16"
+    val tapir           = "1.13.33"
+    val circe           = "0.14.17"
     val catsEffect      = "3.7.1"
     val slick           = "3.6.1"
     val h2              = "2.5.252"
@@ -15,6 +15,8 @@ object Dependencies:
     val laminext        = "0.17.0"
     val munitCatsEffect = "2.2.1"
     val sttpClient      = "3.11.0"
+    val angusMail       = "2.0.5"
+    val greenMail       = "2.1.14"
 
   lazy val tapir = libraryDependencies ++= Seq(
     "com.softwaremill.sttp.tapir" %% "tapir-core"       % V.tapir,
@@ -37,6 +39,11 @@ object Dependencies:
   lazy val database = libraryDependencies ++= Seq(
     "com.typesafe.slick" %% "slick" % V.slick,
     "com.h2database"      % "h2"    % V.h2 % Test,
+  )
+
+  lazy val mail = libraryDependencies ++= Seq(
+    "org.eclipse.angus" % "angus-mail" % V.angusMail,
+    "com.icegreen"      % "greenmail"  % V.greenMail % Test,
   )
 
   lazy val scalajs = libraryDependencies ++=

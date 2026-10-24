@@ -62,8 +62,8 @@ for full stack websites built on Slick, Cats Effect and Laminar, and optionally 
   then the doomed groups, read again under their locks until none was nested beneath them meanwhile; sole ownership is
   read again under them, and a resource the hook no longer finds passes to nobody. An account takes the groups it alone
   owns, and those only such groups own (`GroupStore.soleGroupsOf`); a group someone else owns too survives.
-  Email is off unless the host passes `AuthService` a `Mailing`: its `Mailer` (the library connects to no mail
-  server), the site's name, the pages the links lead to (built from the host's own base URL, never the `Host`
+  Email is off unless the host passes `AuthService` a `Mailing`: its `Mailer` (`Mailer.logged` for development, `smtp`'s
+  `SmtpMailer`, or the host's own), the site's name, the pages the links lead to (built from the host's own base URL, never the `Host`
   header) and the wording the mail is written in. `users.email` holds an address only once the link sent to it
   is opened; links live in `email_links` as hashes, by `EmailPurpose` (`Reset`, `Confirm`), issued under the
   user's row lock (which using one takes first too): a confirmation replaces the last, a reset does not.
@@ -96,6 +96,10 @@ for full stack websites built on Slick, Cats Effect and Laminar, and optionally 
   that way, so that a host serving its endpoints with anything else never needs it.
   Tapir also brought `scala-java-time` (and `java.util.Locale`) to every JS module, silently, so nothing in `core`
   or `client` may use `java.time` or `java.util.Locale` now: Scala.js lacks them, and only linking JS shows it.
+- `smtp` (`com.alecdorrington.hecate.smtp`) - `SmtpMailer`, a `Mailer` over SMTP with Jakarta Mail (Angus), and
+  `SmtpSettings` (`from(lookup)`/`fromEnv`: `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURITY`, `SMTP_USERNAME`/`SMTP_PASSWORD`,
+  `MAIL_FROM`), where a variable set to anything unusable configures nothing rather than a default. Only `smtp`
+  depends on Jakarta Mail: keep it that way, so that a host sending mail any other way never needs it.
 - `client` (`com.alecdorrington.hecate.client`) - headless Laminar state (`AuthState`, `GroupsState`), and what a
   view makes for itself and binds (`SharingState`, `InviteLinks`, `Recipients`). Every request to a secured
   endpoint goes through `AuthState.outcome`/`explained`, which recheck the session on a refusal, as an ended
@@ -143,8 +147,8 @@ other than `plugins-scalajs.sbt`) comes from further upstream still, in
 ### Build
 
 - `hecateCore` and `hecateTapir` are `projectMatrix`es (JVM + JS; the JS rows are `hecateCoreJS` and `hecateTapirJS`),
-  `hecateServer` and `hecateServerTapir` are JVM (the latter depends on the former's tests too, for `TestDb` and
-  `Fixtures`), `hecateClient` is Scala.js, and the root project `hecate` only aggregates them and is never published.
+  `hecateServer`, `hecateServerTapir` and `hecateSmtp` are JVM (`hecateServerTapir` depends on `hecateServer`'s tests
+  too, for `TestDb` and `Fixtures`), `hecateClient` is Scala.js, and the root project `hecate` only aggregates them and is never published.
 - Project ids are prefixed with the library's name because the private project includes this build by reference
   (`ProjectRef(file("hecate"), ...)`), and its own projects are called `server`, `client` and `common`.
 - Each matrix pins `sourceDirectory` to `(ThisBuild / baseDirectory) / "<module>" / "src"`. Don't remove it: sbt 2.0.8

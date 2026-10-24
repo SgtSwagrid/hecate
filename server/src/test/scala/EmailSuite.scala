@@ -484,6 +484,29 @@ class EmailSuite extends CatsEffectSuite:
           assertEquals(changed, Left(AuthRefusal.NoEmail))
           assertEquals(forgot, Left(AuthRefusal.NoEmail))
 
+  test("a logged mailer writes out the whole mail, links and all"):
+    for
+      written <- Ref[IO].of(List.empty[String])
+      _       <- Mailer
+        .logged(text => written.update(_ :+ text))
+        .send(Mail(
+          address,
+          "Reset",
+          "https://example.com/reset/abc",
+        ))
+      texts <- written.get
+    yield
+      assertEquals(texts.size, 1)
+      List(
+        address,
+        "Reset",
+        "https://example.com/reset/abc",
+      ).foreach: part =>
+        assert(
+          texts.head.contains(part),
+          s"no $part in ${ texts.head }",
+        )
+
 object EmailSuite:
 
   private val password = "hunter2222"
