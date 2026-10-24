@@ -4,9 +4,9 @@
   <p>User accounts, sessions, groups and permissions for full stack <a href="https://www.scala-lang.org/">Scala</a> websites.</p>
 
   <span>
-    <a href="https://github.com/SgtSwagrid/Hecate/actions/workflows/build-integrity.yml"><img src="https://github.com/SgtSwagrid/Hecate/actions/workflows/build-integrity.yml/badge.svg" alt="Build status" /></a>
+    <a href="https://github.com/SgtSwagrid/hecate/actions/workflows/build-integrity.yml"><img src="https://github.com/SgtSwagrid/hecate/actions/workflows/build-integrity.yml/badge.svg" alt="Build status" /></a>
     <a href="https://search.maven.org/artifact/com.alecdorrington/hecate-core_3"><img src="https://img.shields.io/maven-central/v/com.alecdorrington/hecate-core_3.svg" alt="Maven Central" /></a>
-    <a href="https://alecdorrington.com/Hecate"><img src="https://img.shields.io/badge/docs-latest-blue.svg" alt="Documentation" /></a>
+    <a href="https://alecdorrington.com/hecate"><img src="https://img.shields.io/badge/docs-latest-blue.svg" alt="Documentation" /></a>
   </span>
 
 </div>
@@ -17,7 +17,8 @@
 A library for user accounts, sign-in sessions, nestable user groups, and the permissions that people
 and groups hold over whatever your application calls a resource.
 It knows nothing of the application it serves: it opens no database, fixes no JDBC profile, needs no
-particular HTTP framework, connects to no mail server, and renders nothing.
+particular HTTP framework, connects to no mail server unless you add `hecate-smtp`, and renders
+nothing.
 
 Named for [Hecate](https://en.wikipedia.org/wiki/Hecate), keeper of keys and guardian of gates and crossroads.
 
@@ -29,6 +30,7 @@ Add whichever halves you need to your `build.sbt`:
 libraryDependencies += "com.alecdorrington" %% "hecate-server"       % "0.1.0" // On the JVM.
 libraryDependencies += "com.alecdorrington" %% "hecate-server-tapir" % "0.1.0" // On the JVM, with Tapir.
 libraryDependencies += "com.alecdorrington" %% "hecate-client"       % "0.1.0" // In the browser.
+libraryDependencies += "com.alecdorrington" %% "hecate-smtp"         % "0.1.0" // On the JVM, to send mail over SMTP.
 ```
 
 Compiled with Scala `3.9.0`, with no intention to explicitly support older versions.
@@ -42,6 +44,7 @@ Compiled with Scala `3.9.0`, with no intention to explicitly support older versi
 | [`hecate-client`](client)             | JS       | Headless browser-side state.                               |
 | [`hecate-tapir`](tapir)               | JVM + JS | The API's endpoints, described with Tapir.                 |
 | [`hecate-server-tapir`](server-tapir) | JVM      | The services, served as those endpoints.                   |
+| [`hecate-smtp`](smtp)                 | JVM      | A mailer that sends over SMTP.                             |
 
 A host application uses the server half, the client half, or both;
 the shared half comes with either, so the two agree on the wire format by construction.
@@ -350,14 +353,20 @@ password gives their username, one unused code and a new password, and is signed
 Each code works once, and generating a new set invalidates the old one. A failed
 recovery never says whether the username or the code was wrong.
 
-**Email** is off unless the host passes a `Mailing`. The library opens no connection to a mail
-server, just as it opens no database: it composes each mail itself, worded by the host's
-`Wording`, and hands it to a `Mailer` of the host's, which sends it however the host sends mail
-(SMTP, a provider's API, or a log in development).
+**Email** is off unless the host passes a `Mailing`. The library composes each mail itself,
+worded by the host's `Wording`, and hands it to a `Mailer`, which sends it however the host
+sends mail. `hecate-smtp`'s `SmtpMailer` sends through any mail server that speaks SMTP, and
+`SmtpSettings.fromEnv` reads where that is from the environment; a host sending through a
+provider's API writes a `Mailer` of its own, and `Mailer.logged` writes each mail out in
+development instead.
 
 ```scala
+val mailer = SmtpSettings.fromEnv match
+  case Some(settings) => SmtpMailer(settings)
+  case None           => Mailer.logged(text => IO.println(text))
+
 val mailing = Mailing(
-  mailer      = mail => sendOverSmtp(mail.to, mail.subject, mail.body),
+  mailer      = mailer,
   site        = "Example",
   resetPage   = token => s"https://example.com/reset/$token",
   confirmPage = token => s"https://example.com/confirm/$token",
@@ -365,6 +374,20 @@ val mailing = Mailing(
 )
 val auth = AuthService(users, mailing = Some(mailing))
 ```
+
+`SmtpSettings.fromEnv` reads these variables, and configures nothing (`None`) when `SMTP_HOST` or
+`MAIL_FROM` is unset, or when any of them is set to something it cannot use, rather than
+quietly falling back to a default:
+
+| Name            | Meaning                                                                          |
+|-----------------|----------------------------------------------------------------------------------|
+| `SMTP_HOST`     | The mail server.                                                                 |
+| `SMTP_PORT`     | Optional. Its port; by default `587`, or `465` with `tls`, or `25` with `none`.  |
+| `SMTP_SECURITY` | Optional. `starttls` (the default), `tls`, or `none` for a relay on the machine. |
+| `SMTP_USERNAME` | Optional, with `SMTP_PASSWORD`. What to sign in to the mail server with.         |
+| `MAIL_FROM`     | Whom mail is from, as `Example <noreply@example.com>`.                           |
+
+To read them under other names, pass `SmtpSettings.from` a lookup of your own.
 
 The two pages are the host's: the first asks for a new password and sends it, with the token,
 to `POST /api/auth/password/reset`; the second, once its reader asks, sends its token to
@@ -640,8 +663,8 @@ Issues are very welcome; for anything more, please open an issue first.
 
 ## 👁️ See also
 
-- [Eunomia](https://github.com/SgtSwagrid/Eunomia), a sibling, for filtering, ordering and paging lists.
-- [Iris](https://github.com/SgtSwagrid/Iris), a sibling, a provider-agnostic client for large language models.
-- [Dike](https://github.com/SgtSwagrid/Dike), a sibling, for ranking by pairwise comparison.
+- [Eunomia](https://github.com/SgtSwagrid/eunomia), a sibling, for filtering, ordering and paging lists.
+- [Iris](https://github.com/SgtSwagrid/iris), a sibling, a provider-agnostic client for large language models.
+- [Dike](https://github.com/SgtSwagrid/dike), a sibling, for ranking by pairwise comparison.
 - [qr4s](https://github.com/SgtSwagrid/qr4s), a sibling, for generating QR codes, on the JVM and in the browser.
 - This library was made using [Scala Library Template](https://github.com/SgtSwagrid/scala-library-template).

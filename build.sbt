@@ -77,6 +77,17 @@ lazy val hecateServerTapir = project
     Dependencies.munitCatsEffect,
   )
 
+lazy val hecateSmtp = project
+  .in(file("smtp"))
+  .dependsOn(hecateServer)
+  .settings(
+    name          := "hecate-smtp",
+    packagePrefix := s"$projectRoot.smtp",
+    Dependencies.catsEffect,
+    Dependencies.mail,
+    Dependencies.munitCatsEffect,
+  )
+
 lazy val hecateClient = project
   .in(file("client"))
   .dependsOn(hecateCore.js(scala3))
@@ -97,6 +108,7 @@ lazy val hecate = project
     (hecateCore.projectRefs ++ hecateTapir.projectRefs ++ Seq[ProjectReference](
       hecateServer,
       hecateServerTapir,
+      hecateSmtp,
       hecateClient,
     )) *,
   )
@@ -109,6 +121,7 @@ lazy val hecate = project
       hecateTapir.jvm(scala3),
       hecateServer,
       hecateServerTapir,
+      hecateSmtp,
     ),
     ScalaUnidoc / unidoc / scalacOptions ++= Seq("-project", "Hecate"),
   )

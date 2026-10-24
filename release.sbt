@@ -1,12 +1,12 @@
 ThisBuild / description :=
   "User accounts, sessions, groups and permissions for full stack Scala websites."
 
-ThisBuild / homepage := Some(uri("https://github.com/SgtSwagrid/Hecate"))
+ThisBuild / homepage := Some(uri("https://github.com/SgtSwagrid/hecate"))
 
 // Stated, as the git remote is the host's when built there.
 ThisBuild / scmInfo := Some(ScmInfo(
-  uri("https://github.com/SgtSwagrid/Hecate"),
-  "scm:git:https://github.com/SgtSwagrid/Hecate.git",
+  uri("https://github.com/SgtSwagrid/hecate"),
+  "scm:git:https://github.com/SgtSwagrid/hecate.git",
 ))
 
 ThisBuild / organization         := "com.alecdorrington"

@@ -18,6 +18,29 @@ trait Mailer:
     */
   def send(mail: Mail): IO[Unit]
 
+object Mailer:
+
+  /**
+    * Makes a mailer for development without a mail server, which writes each
+    * mail out whole instead of sending it. Never use it in production, where
+    * whatever it writes to would then hold every link.
+    *
+    * @param write
+    *   Writes out the text of one mail, as to a log.
+    *
+    * @return
+    *   A mailer that sends nothing.
+    */
+  def logged(write: String => IO[Unit]): Mailer = mail =>
+    write(
+      List(
+        s"An email to ${ mail
+            .to }, which no mail server is configured to send:",
+        mail.subject,
+        mail.body,
+      ).mkString("\n\n"),
+    )
+
 /**
   * An email in plain text.
   *
