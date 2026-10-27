@@ -4,7 +4,6 @@ package client
 import com.alecdorrington.hecate.model.{Access, Grant, InviteLink, Principal}
 import com.raquo.laminar.api.L.*
 import io.circe.{Decoder, Json}
-import io.laminext.fetch.circe.*
 import scala.concurrent.ExecutionContext.Implicits.global
 
 /**
@@ -94,7 +93,7 @@ final class SharingState
     val request = access match
       case Some(level) => Fetch.put(url, body = level)
       case None        => Fetch.delete(url)
-    changing[Unit](request.text, regrants)
+    changing[Unit](request, regrants)
 
   /**
     * Changes the invite link, with any refusal reported through [[error]].
@@ -111,7 +110,7 @@ final class SharingState
         Fetch.put(linkBase, body = access)
       case SharingState.LinkChange.Renew => Fetch.post(linkBase)
       case SharingState.LinkChange.Off   => Fetch.delete(linkBase)
-    changing[Json](request.text, relinks)
+    changing[Json](request, relinks)
 
   /**
     * Reads an endpoint at first and on each reread or reload, silent if
@@ -126,15 +125,13 @@ final class SharingState
       reloads,
     )
     .flatMapSwitch(_ =>
-      auth
-        .explained[X](Fetch.get(url).text)
-        .collect { case Right(value) => value },
+      auth.explained[X](Fetch.get(url)).collect { case Right(value) => value },
     )
 
   /** Makes a change, reports any refusal, and has what it changed reread. */
   private def changing[X : Decoder]
     (
-      request: EventStream[FetchResponse[String]],
+      request: EventStream[Response],
       reread: EventBus[Unit],
     )
     : EventStream[Unit] = auth

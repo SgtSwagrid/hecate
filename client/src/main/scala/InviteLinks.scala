@@ -3,7 +3,6 @@ package client
 
 import com.alecdorrington.hecate.model.{LinkPreview, LinkTarget}
 import com.raquo.laminar.api.L.*
-import io.laminext.fetch.circe.*
 import scala.concurrent.ExecutionContext.Implicits.global
 
 /**
@@ -28,7 +27,7 @@ final class InviteLinks(auth: AuthState, groups: GroupsState):
     *   A stream asking when followed, emitting the preview or a refusal.
     */
   def preview(code: String): EventStream[Either[String, LinkPreview]] = auth
-    .explained[LinkPreview](Fetch.get(path(code)).text)
+    .explained[LinkPreview](Fetch.get(path(code)))
 
   /**
     * Follows an invite link, giving the user what it leads to.
@@ -41,7 +40,7 @@ final class InviteLinks(auth: AuthState, groups: GroupsState):
     *   refusal.
     */
   def follow(code: String): EventStream[Either[String, LinkTarget]] = auth
-    .explained[LinkTarget](Fetch.post(s"${ path(code) }/follow").text)
+    .explained[LinkTarget](Fetch.post(s"${ path(code) }/follow"))
     .map: outcome =>
       if outcome.isRight then groups.refresh()
       outcome

@@ -9,7 +9,6 @@ import com.alecdorrington.hecate.model.{
 import com.raquo.laminar.api.L.*
 import io.circe.Decoder
 import io.circe.parser.decode
-import io.laminext.fetch.circe.*
 import scala.concurrent.ExecutionContext.Implicits.global
 
 /**
@@ -104,14 +103,11 @@ final class GroupsState
     *   The identifier of the group to nest it inside, or `None` for the top
     *   level.
     */
-  def create(name: String, parent: Option[Long] = None): Unit = perform(
-    Fetch
-      .post(
-        "/api/groups",
-        body = GroupDetails(name, parent),
-      )
-      .text,
-  )
+  def create(name: String, parent: Option[Long] = None): Unit =
+    perform(Fetch.post(
+      "/api/groups",
+      body = GroupDetails(name, parent),
+    ))
 
   /**
     * Renames a group, leaving its place in the hierarchy alone.
@@ -165,8 +161,7 @@ final class GroupsState
     * @param group
     *   The identifier of the group.
     */
-  def delete(group: Long): Unit =
-    perform(Fetch.delete(s"/api/groups/$group").text)
+  def delete(group: Long): Unit = perform(Fetch.delete(s"/api/groups/$group"))
 
   /**
     * Invites a user to a group.
@@ -177,14 +172,10 @@ final class GroupsState
     * @param username
     *   The username of the user to invite.
     */
-  def invite(group: Long, username: String): Unit = perform(
-    Fetch
-      .post(
-        s"/api/groups/$group/invitations",
-        body = Invitee(username),
-      )
-      .text,
-  )
+  def invite(group: Long, username: String): Unit = perform(Fetch.post(
+    s"/api/groups/$group/invitations",
+    body = Invitee(username),
+  ))
 
   /**
     * Removes a member from a group, cancels their invitation, or declines their
@@ -197,7 +188,7 @@ final class GroupsState
     *   The identifier of the person.
     */
   def remove(group: Long, person: Long): Unit =
-    perform(Fetch.delete(s"/api/groups/$group/members/$person").text)
+    perform(Fetch.delete(s"/api/groups/$group/members/$person"))
 
   /**
     * Accepts an invitation, joining its group.
@@ -206,7 +197,7 @@ final class GroupsState
     *   The identifier of the invitation.
     */
   def accept(invitation: Long): Unit =
-    perform(Fetch.post(s"/api/invitations/$invitation/accept").text)
+    perform(Fetch.post(s"/api/invitations/$invitation/accept"))
 
   /**
     * Declines an invitation, deleting it.
@@ -215,7 +206,7 @@ final class GroupsState
     *   The identifier of the invitation.
     */
   def decline(invitation: Long): Unit =
-    perform(Fetch.post(s"/api/invitations/$invitation/decline").text)
+    perform(Fetch.post(s"/api/invitations/$invitation/decline"))
 
   /**
     * Withdraws the signed-in user from a group.
@@ -224,7 +215,7 @@ final class GroupsState
     *   The identifier of the group.
     */
   def leave(group: Long): Unit =
-    perform(Fetch.delete(s"/api/groups/$group/membership").text)
+    perform(Fetch.delete(s"/api/groups/$group/membership"))
 
   /**
     * Makes the signed-in user a member of a group they may change.
@@ -233,7 +224,7 @@ final class GroupsState
     *   The identifier of the group.
     */
   def join(group: Long): Unit =
-    perform(Fetch.put(s"/api/groups/$group/membership").text)
+    perform(Fetch.put(s"/api/groups/$group/membership"))
 
   /**
     * Asks to join a group. Joins at once a group the user is invited to or may
@@ -243,7 +234,7 @@ final class GroupsState
     *   The identifier of the group.
     */
   def request(group: Long): Unit =
-    perform(Fetch.put(s"/api/groups/$group/request").text)
+    perform(Fetch.put(s"/api/groups/$group/request"))
 
   /**
     * Withdraws the signed-in user's request to join a group.
@@ -252,7 +243,7 @@ final class GroupsState
     *   The identifier of the group.
     */
   def withdraw(group: Long): Unit =
-    perform(Fetch.delete(s"/api/groups/$group/request").text)
+    perform(Fetch.delete(s"/api/groups/$group/request"))
 
   /**
     * Admits to a group someone who has asked to join it.
@@ -264,7 +255,7 @@ final class GroupsState
     *   The identifier of the person.
     */
   def admit(group: Long, person: Long): Unit =
-    perform(Fetch.put(s"/api/groups/$group/members/$person").text)
+    perform(Fetch.put(s"/api/groups/$group/members/$person"))
 
   /**
     * Makes a group public, or private again.
@@ -275,14 +266,10 @@ final class GroupsState
     * @param public
     *   Whether the group is to be public.
     */
-  def setPublic(group: Long, public: Boolean): Unit = perform(
-    Fetch
-      .put(
-        s"/api/groups/$group/public",
-        body = public,
-      )
-      .text,
-  )
+  def setPublic(group: Long, public: Boolean): Unit = perform(Fetch.put(
+    s"/api/groups/$group/public",
+    body = public,
+  ))
 
   /**
     * Gives a group an invite link unless it has one.
@@ -291,7 +278,7 @@ final class GroupsState
     *   The identifier of the group.
     */
   def link(group: Long): Unit =
-    perform(Fetch.put(s"/api/groups/$group/invite-link").text)
+    perform(Fetch.put(s"/api/groups/$group/invite-link"))
 
   /**
     * Replaces a group's invite link with a new one, ending the old.
@@ -300,7 +287,7 @@ final class GroupsState
     *   The identifier of the group.
     */
   def relink(group: Long): Unit =
-    perform(Fetch.post(s"/api/groups/$group/invite-link").text)
+    perform(Fetch.post(s"/api/groups/$group/invite-link"))
 
   /**
     * Turns off a group's invite link.
@@ -309,16 +296,14 @@ final class GroupsState
     *   The identifier of the group.
     */
   def unlink(group: Long): Unit =
-    perform(Fetch.delete(s"/api/groups/$group/invite-link").text)
+    perform(Fetch.delete(s"/api/groups/$group/invite-link"))
 
   /** Discards the last error. */
   def clearError(): Unit = errorVar.set(None)
 
   private def update
     (group: Long, details: GroupDetails)
-    : EventStream[FetchResponse[String]] = Fetch
-    .put(s"/api/groups/$group", body = details)
-    .text
+    : EventStream[Response] = Fetch.put(s"/api/groups/$group", body = details)
 
   private def listed[X : Decoder](url: String): Signal[List[X]] = userId
     .flatMapSwitch:
@@ -333,7 +318,7 @@ final class GroupsState
     .observe
 
   private def read[X : Decoder](url: String): EventStream[List[X]] = Outcome
-    .of(Fetch.get(url).text)
+    .of(Fetch.get(url))
     .map:
       case Outcome.Answered(response) => decode[List[X]](response.data)
           .getOrElse(List.empty)
@@ -341,7 +326,7 @@ final class GroupsState
 
   private def perform
     (
-      request: EventStream[FetchResponse[String]],
+      request: EventStream[Response],
       refused: String => Unit = _ => (),
     )
     : Unit =
