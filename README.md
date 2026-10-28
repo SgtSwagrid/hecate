@@ -12,7 +12,7 @@
 </div>
 
 > [!WARNING]
-> Hecate is in beta. It is young, it has one user, and anything may change between minor versions.
+> Hecate is still a prototype. Anything could be broken or change between minor versions.
 
 A library for user accounts, sign-in sessions, nestable user groups, and the permissions that people
 and groups hold over whatever your application calls a resource.
@@ -24,16 +24,23 @@ Named for [Hecate](https://en.wikipedia.org/wiki/Hecate), keeper of keys and gua
 
 ## ⬇️ Installation
 
-Add whichever halves you need to your `build.sbt`:
+There are several components which can be installed separately, but the same version number (e.g. [latest](../../releases/latest)) must be used across all of them.
+The following applies for [Scala 3](https://www.scala-lang.org/) projects built with [sbt 2](https://www.scala-sbt.org/).
+Add the desired components to your `build.sbt` file:
 
 ```scala
-libraryDependencies += "com.alecdorrington" %% "hecate-server"       % "0.2.0" // On the JVM.
-libraryDependencies += "com.alecdorrington" %% "hecate-server-tapir" % "0.2.0" // On the JVM, with Tapir.
-libraryDependencies += "com.alecdorrington" %% "hecate-client"       % "0.2.0" // In the browser.
-libraryDependencies += "com.alecdorrington" %% "hecate-smtp"         % "0.2.0" // On the JVM, to send mail over SMTP.
-```
+// Server, on the JVM
+libraryDependencies += "com.alecdorrington" %% "hecate-server" % "{version}"
 
-Compiled with Scala `3.9.0`, with no intention to explicitly support older versions.
+// Server, with Tapir endpoints
+libraryDependencies += "com.alecdorrington" %% "hecate-server-tapir" % "{version}"
+
+// Client, in the browser
+libraryDependencies += "com.alecdorrington" %% "hecate-client" % "{version}"
+
+// Sending mail over SMTP
+libraryDependencies += "com.alecdorrington" %% "hecate-smtp" % "{version}"
+```
 
 ## 🏯 Layout
 
