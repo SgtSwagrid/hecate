@@ -27,10 +27,10 @@ Named for [Hecate](https://en.wikipedia.org/wiki/Hecate), keeper of keys and gua
 Add whichever halves you need to your `build.sbt`:
 
 ```scala
-libraryDependencies += "com.alecdorrington" %% "hecate-server"       % "0.1.0" // On the JVM.
-libraryDependencies += "com.alecdorrington" %% "hecate-server-tapir" % "0.1.0" // On the JVM, with Tapir.
-libraryDependencies += "com.alecdorrington" %% "hecate-client"       % "0.1.0" // In the browser.
-libraryDependencies += "com.alecdorrington" %% "hecate-smtp"         % "0.1.0" // On the JVM, to send mail over SMTP.
+libraryDependencies += "com.alecdorrington" %% "hecate-server"       % "0.2.0" // On the JVM.
+libraryDependencies += "com.alecdorrington" %% "hecate-server-tapir" % "0.2.0" // On the JVM, with Tapir.
+libraryDependencies += "com.alecdorrington" %% "hecate-client"       % "0.2.0" // In the browser.
+libraryDependencies += "com.alecdorrington" %% "hecate-smtp"         % "0.2.0" // On the JVM, to send mail over SMTP.
 ```
 
 Compiled with Scala `3.9.0`, with no intention to explicitly support older versions.
@@ -657,9 +657,7 @@ ask again who is signed in whenever one is refused.
 
 ## 🤝 Contributing
 
-Hecate is developed as part of a larger private project, of which this repository is an automatically synchronised
-mirror (by [GitHub Graph](https://github.com/SgtSwagrid/github-graph)), so changes made here directly would be overwritten.
-Issues are very welcome; for anything more, please open an issue first.
+Issues and pull requests are very welcome; for anything large, please open an issue first.
 
 ## 👁️ See also
 
