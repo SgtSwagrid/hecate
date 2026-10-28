@@ -12,7 +12,7 @@ Keep it concise and actionable.
 ## Project overview
 
 This is Hecate, a Scala 3 library for user accounts, sign-in sessions, nestable user groups and permissions,
-for full stack websites built on Slick, Cats Effect and Laminar, and optionally Tapir. It is in beta.
+for full stack websites built on Slick, Cats Effect and Laminar, and optionally Tapir. It is still a prototype.
 
 - `core` (`com.alecdorrington.hecate`, JVM + JS) - the model (`User`, `Caller`, `Group`, `Principal`, `Access`,
   `Grant`, `Resource`, `Permitted`, `Gated`, `AuthRefusal`), the wording of what the library says (`i18n/Wording`)
@@ -167,9 +167,10 @@ it only through a release (below).
 
 ### Releases
 
-1. Land the changes on `main` by pull request, the last of them setting the README's installation lines to the new
-   version. Hecate is in beta, versioned by early semver (`versionScheme`): while it is `0.x`, the minor version goes
-   up for any change that can break a user's build or behaviour, and the patch version for anything else.
+1. Land the changes on `main` by pull request. The README's installation lines name no version (they read
+   `{version}`, pointing to the latest release), so a release leaves them as they are. Hecate is still a prototype,
+   versioned by early semver (`versionScheme`): while it is `0.x`, the minor version goes up for any change that can
+   break a user's build or behaviour, and the patch version for anything else.
 2. Publish a GitHub release of `main` tagged `v<version>`, with notes written for a user, as the earlier releases' are
    (the installation lines, then what is Changed, Added and Fixed). `publish.yml` then publishes
    `hecate-core` and `hecate-tapir` (each for the JVM and JS), `hecate-server`, `hecate-server-tapir`,
