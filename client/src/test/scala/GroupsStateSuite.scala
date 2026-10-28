@@ -8,29 +8,14 @@ class GroupsStateSuite extends FunSuite:
 
   import GroupsStateSuite.*
 
-  test("a flat list is nested by parent"):
-    val forest = GroupsState.nest(List(
-      view(1, "Sales"),
-      view(2, "Retail", parent = 1),
-      view(3, "Front desk", parent = 2),
-    ))
-    assertEquals(names(forest), List("Sales"))
-    assertEquals(
-      names(forest.head.children),
-      List("Retail"),
-    )
-    assertEquals(
-      names(forest.head.children.head.children),
-      List("Front desk"),
-    )
-
-  test("siblings are ordered by name, at every depth"):
+  test("a list is nested by parent, siblings ordered by name at every depth"):
     val forest = GroupsState.nest(List(
       view(1, "Sales"),
       view(2, "Zebra"),
       view(3, "Apples"),
       view(4, "Yak", parent = 1),
       view(5, "Ants", parent = 1),
+      view(6, "Front desk", parent = 5),
     ))
     assertEquals(
       names(forest),
@@ -40,22 +25,28 @@ class GroupsStateSuite extends FunSuite:
       names(forest(1).children),
       List("Ants", "Yak"),
     )
-
-  test("a group whose parent is not in the list is shown at the top"):
-    val forest = GroupsState.nest(List(
-      view(1, "Orphan", parent = 99),
-      view(2, "Sales"),
-    ))
-    assertEquals(names(forest), List("Orphan", "Sales"))
-
-  test("every group given appears exactly once"):
-    val groups = List(
-      view(1, "Sales"),
-      view(2, "Retail", parent = 1),
-      view(3, "Front desk", parent = 2),
-      view(4, "Chess club"),
+    assertEquals(
+      names(forest(1).children.head.children),
+      List("Front desk"),
     )
-    val shown = GroupsState.nest(groups).flatMap(_.flatten).map(_.view.group.id)
+
+  test("every group appears once, its parent missing or in a cycle at the top"):
+    // The server never stores a cycle, but the client must not lose a group to
+    // one, nor spin on it.
+    val groups = List(
+      view(1, "Sales", parent = 2),
+      view(2, "Retail", parent = 1),
+      view(3, "Orphan", parent = 99),
+      view(4, "Chess club"),
+      view(5, "Front desk", parent = 4),
+    )
+    val forest = GroupsState.nest(groups)
+    val shown  = forest.flatMap(_.flatten).map(_.view.group.id)
+    // The groups at the top are ordered by name, a cycle's after the rest.
+    assertEquals(
+      names(forest),
+      List("Chess club", "Orphan", "Retail"),
+    )
     assertEquals(
       shown.sorted,
       groups.map(_.group.id).sorted,
@@ -81,7 +72,12 @@ class GroupsStateSuite extends FunSuite:
 
   test("a tree's members are those of the groups beneath it, each once"):
     val forest = GroupsState.nest(List(
-      view(1, "Sales", members = List(alice)),
+      view(
+        1,
+        "Sales",
+        members = List(alice),
+        invitees = List(carol),
+      ),
       view(
         2,
         "Retail",
@@ -90,30 +86,11 @@ class GroupsStateSuite extends FunSuite:
       ),
       view(3, "Chess club", members = List(carol)),
     ))
+    // Invitees are never counted as members.
     assertEquals(
       forest.find(_.view.group.id == 1).get.members.map(_.username),
       List("alice", "bob"),
     )
-
-  test("a cycle buries no group, and does not spin"):
-    // The server never stores a cycle, but the client must not lose a group to
-    // one.
-    val forest = GroupsState.nest(List(
-      view(1, "Sales", parent = 2),
-      view(2, "Retail", parent = 1),
-      view(3, "Chess club"),
-    ))
-    val shown = forest.flatMap(_.flatten).map(_.view.group.id).distinct
-    assertEquals(shown.sorted, List(1L, 2L, 3L))
-
-  test("invitees are never counted as members"):
-    val forest = GroupsState.nest(List(view(
-      1,
-      "Sales",
-      members = List(alice),
-      invitees = List(bob),
-    )))
-    assertEquals(forest.head.members, List(alice))
 
 object GroupsStateSuite:
 

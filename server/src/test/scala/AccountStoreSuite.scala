@@ -23,16 +23,17 @@ class AccountStoreSuite extends CatsEffectSuite:
         alice <- register(users, "alice")
         bob   <- register(users, "bob")
         _     <- users.openSession("alice-token", alice.id, soon)
+        _     <- users.openSession("bob-token", bob.id, soon)
         _     <- users.replaceRecoveryCodes(alice.id, List("one", "two"))
         hers  <- groups.create(alice.id, GroupDetails("Alice's team"))
         his   <- groups.create(bob.id, GroupDetails("Bob's team"))
         _     <- enrol(groups, bob, his.id, alice)
         _     <- groups.invite(alice.id, hers.id, "bob")
-        // Edit rather than Own, as the only owner of something is refused.
+        // A co-owner may delete their account, as the other owner remains.
         _ <- grant(grants, db)(
           document,
           Principal.Person(alice.id),
-          Access.Edit,
+          Access.Own,
         )
         _ <- grant(grants, db)(
           document,
@@ -42,19 +43,34 @@ class AccountStoreSuite extends CatsEffectSuite:
         _ <- grant(grants, db)(
           document,
           Principal.Person(bob.id),
+          Access.Own,
+        )
+        // Something nobody owns, which the account may only edit.
+        _ <- grant(grants, db)(
+          unowned,
+          Principal.Person(alice.id),
+          Access.Edit,
+        )
+        _ <- grant(grants, db)(
+          unowned,
+          Principal.Person(bob.id),
           Access.View,
         )
         _        <- accounts.delete(alice.id)
         gone     <- users.find(alice.id)
         session  <- users.sessionUser("alice-token")
+        still    <- users.sessionUser("bob-token")
         codes    <- users.recoveryCodesLeft(alice.id)
         bobsView <- groups.managed(bob.id)
         invited  <- groups.invitations(bob.id)
         left     <- grants.over(document)
+        viewed   <- grants.over(unowned)
       yield
         assertEquals(gone, None)
         assertEquals(session, None)
+        assertEquals(still, Some(bob))
         assertEquals(codes, 0)
+        assertEquals(bobsView.map(_.group), List(his))
         assertEquals(
           bobsView.flatMap(_.members),
           List.empty,
@@ -62,6 +78,10 @@ class AccountStoreSuite extends CatsEffectSuite:
         assertEquals(invited, List.empty)
         assertEquals(
           left.map(_.principal),
+          List(Principal.Person(bob.id)),
+        )
+        assertEquals(
+          viewed.map(_.principal),
           List(Principal.Person(bob.id)),
         )
         assertEquals(
@@ -134,50 +154,13 @@ class AccountStoreSuite extends CatsEffectSuite:
         )
         assertEquals(gone, None)
 
-  test("a co-owner can delete their account, and the other owner keeps theirs"):
-    withAccounts("co-owner"): (users, _, grants, accounts, db) =>
-      for
-        alice <- register(users, "alice")
-        bob   <- register(users, "bob")
-        _     <- grant(grants, db)(
-          document,
-          Principal.Person(alice.id),
-          Access.Own,
-        )
-        _ <- grant(grants, db)(
-          document,
-          Principal.Person(bob.id),
-          Access.Own,
-        )
-        _    <- accounts.delete(alice.id)
-        gone <- users.find(alice.id)
-        left <- grants.over(document)
-      yield
-        assertEquals(gone, None)
-        assertEquals(
-          left.map(_.principal),
-          List(Principal.Person(bob.id)),
-        )
-
-  test("deleting one account leaves every other account alone"):
-    withAccounts("others"): (users, groups, _, accounts, _) =>
-      for
-        alice <- register(users, "alice")
-        bob   <- register(users, "bob")
-        _     <- users.openSession("bob-token", bob.id, soon)
-        his   <- groups.create(bob.id, GroupDetails("Bob's team"))
-        _     <- accounts.delete(alice.id)
-        still <- users.sessionUser("bob-token")
-        view  <- groups.managed(bob.id)
-      yield
-        assertEquals(still, Some(bob))
-        assertEquals(view.map(_.group), List(his))
-
 object AccountStoreSuite:
 
   private val soon = System.currentTimeMillis + 60000
 
   private val document = Resource("document", 1)
+
+  private val unowned = Resource("document", 3)
 
   private def withAccounts
     (

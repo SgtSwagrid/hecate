@@ -7,7 +7,8 @@ class SmtpSettingsSuite extends FunSuite:
 
   import SmtpSettingsSuite.*
 
-  test("A host and a sender are enough, over STARTTLS on its usual port."):
+  test("A host and a sender are enough, and the rest is read as given."):
+    // Over STARTTLS on its usual port, or a security's usual port.
     assertEquals(
       SmtpSettings.from(variables()),
       Some(SmtpSettings(
@@ -18,16 +19,12 @@ class SmtpSettingsSuite extends FunSuite:
         None,
       )),
     )
-
-  test("A security without a port takes the security's usual port."):
     assertEquals(
       SmtpSettings
         .from(variables("SMTP_SECURITY" -> "TLS"))
         .map(settings => (settings.security, settings.port)),
       Some((SmtpSecurity.Tls, 465)),
     )
-
-  test("A port and a login are read as given."):
     assertEquals(
       SmtpSettings
         .from(variables(
@@ -39,17 +36,13 @@ class SmtpSettingsSuite extends FunSuite:
       Some((2525, Some(SmtpLogin("mailer", "secret")))),
     )
 
-  test("Without a host or a sender, nothing is configured."):
-    assertEquals(
-      SmtpSettings.from(without("SMTP_HOST")),
-      None,
-    )
-    assertEquals(
-      SmtpSettings.from(without("MAIL_FROM")),
-      None,
-    )
-
-  test("A variable that cannot be used configures nothing, never a default."):
+  test("A missing or unusable variable configures nothing, never a default."):
+    List("SMTP_HOST", "MAIL_FROM").foreach: name =>
+      assertEquals(
+        SmtpSettings.from(without(name)),
+        None,
+        name,
+      )
     List(
       "SMTP_SECURITY" -> "ssl",
       "SMTP_PORT"     -> "smtp",

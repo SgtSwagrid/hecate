@@ -1,7 +1,7 @@
 package com.alecdorrington.hecate
 package server
 
-import Fixtures.{enrol, grant, refusal, register}
+import Fixtures.{enrol, grant, invitationTo, refusal, register}
 import TestDb.tables.profile.api.*
 import cats.effect.IO
 import com.alecdorrington.hecate.i18n.Wording
@@ -15,7 +15,7 @@ class OwnershipSuite extends CatsEffectSuite:
 
   import OwnershipSuite.*
 
-  test("a group's creator owns it, and nobody else manages it"):
+  test("a group's creator owns it, and nobody else manages it or nests in it"):
     withStores("creator"): world =>
       import world.*
       for
@@ -25,16 +25,35 @@ class OwnershipSuite extends CatsEffectSuite:
         mine     <- groups.managed(owner.id)
         theirs   <- groups.managed(stranger.id)
         refused  <- refusal(groups.invite(stranger.id, team.id, "owner"))
+        absent   <- refusal(groups.invite(stranger.id, 9999L, "owner"))
+        deleted  <- refusal(groups.delete(stranger.id, team.id))
+        nested   <- refusal(groups.create(
+          stranger.id,
+          GroupDetails("Inside", Some(team.id)),
+        ))
+        kept <- groups.managed(owner.id)
       yield
         assertEquals(
           mine.map(view => (view.group.id, view.access)),
           List(team.id -> Access.Own),
         )
         assertEquals(theirs, List.empty)
+        // Another's group reads exactly like one that does not exist.
         assertEquals(
           refused,
           said(AuthRefusal.GroupMissing),
         )
+        assertEquals(refused, absent)
+        assertEquals(
+          deleted,
+          said(AuthRefusal.GroupMissing),
+        )
+        // Nesting needs the right to change the parent.
+        assertEquals(
+          nested,
+          said(AuthRefusal.ParentGroupMissing),
+        )
+        assertEquals(kept.map(_.group.id), List(team.id))
 
   test("a viewer sees who is in a group but changes nothing"):
     withStores("viewer"): world =>
@@ -90,8 +109,10 @@ class OwnershipSuite extends CatsEffectSuite:
           Principal.Person(editor.id),
           Access.Edit,
         )
-        _ <- enrol(groups, editor, team.id, member)
-        _ <- groups.update(
+        _       <- groups.invite(editor.id, team.id, member.username)
+        invited <- invitationTo(groups, member, team.id)
+        _       <- groups.accept(member.id, invited.id)
+        _       <- groups.update(
           editor.id,
           team.id,
           GroupDetails("Renamed"),
@@ -102,6 +123,8 @@ class OwnershipSuite extends CatsEffectSuite:
         deleted <- refusal(groups.delete(editor.id, team.id))
         mayAsk  <- groups.mayAddress(editor.id, Principal.Person(member.id))
       yield
+        // An invitation says who sent it.
+        assertEquals(invited.inviter, Some(editor))
         assertEquals(
           seen.map(_.group.name),
           List("Renamed"),
@@ -116,26 +139,6 @@ class OwnershipSuite extends CatsEffectSuite:
           said(AuthRefusal.GroupMissing),
         )
         assert(mayAsk)
-
-  test("an invitation says who sent it"):
-    withStores("inviter"): world =>
-      import world.*
-      for
-        owner  <- register(users, "owner")
-        editor <- register(users, "editor")
-        guest  <- register(users, "guest")
-        team   <- groups.create(owner.id, GroupDetails("Team"))
-        _      <- give(
-          Resource.group(team.id),
-          Principal.Person(editor.id),
-          Access.Edit,
-        )
-        _    <- groups.invite(editor.id, team.id, guest.username)
-        sent <- groups.invitations(guest.id)
-      yield assertEquals(
-        sent.map(_.inviter),
-        List(Some(editor)),
-      )
 
   test("members see every owner of their group"):
     withStores("owners"): world =>
@@ -197,26 +200,51 @@ class OwnershipSuite extends CatsEffectSuite:
         List(rota.id -> Access.Own),
       )
 
-  test("a co-owned group outlives one owner's account"):
-    withStores("co-owned"): world =>
+  test("an account takes the groups it and its groups alone own, no others"):
+    withStores("account", Set("ops@example.com")): world =>
       import world.*
       for
         first  <- register(users, "first")
         second <- register(users, "second")
+        _      <- confirm(first, "ops@example.com")
         shared <- groups.create(first.id, GroupDetails("Shared"))
         alone  <- groups.create(first.id, GroupDetails("Alone"))
+        board  <- groups.create(first.id, GroupDetails("Board"))
+        panel  <- groups.create(first.id, GroupDetails("Panel"))
+        rota   <- groups.create(first.id, GroupDetails("Rota"))
         _      <- give(
           Resource.group(shared.id),
           Principal.Person(second.id),
           Access.Own,
         )
-        _    <- accounts.delete(first.id)
-        left <- groups.managed(second.id)
-        gone <- groups.names(Seq(alone.id))
-        held <- grants.over(Resource.group(shared.id))
+        // Owned only by a group the account alone owns.
+        _ <- give(
+          Resource.group(panel.id),
+          Principal.Group(board.id),
+          Access.Own,
+        )
+        _ <- db.run(grantsOf(panel.id, Principal.Person(first.id)).delete)
+        // Owned by the system, for which the account acts as an operator.
+        _ <- give(
+          Resource.group(rota.id),
+          Principal.System,
+          Access.Own,
+        )
+        _        <- db.run(grantsOf(rota.id, Principal.Person(first.id)).delete)
+        managing <- groups.managed(first.id)
+        _        <- accounts.delete(first.id)
+        left     <- groups.managed(second.id)
+        gone     <- groups.names(Seq(alone.id, board.id, panel.id))
+        kept     <- groups.names(Seq(rota.id))
+        held     <- grants.over(Resource.group(shared.id))
       yield
+        assertEquals(
+          managing.find(_.group.id == rota.id).map(_.access),
+          Some(Access.Own),
+        )
         assertEquals(left.map(_.group.id), List(shared.id))
         assertEquals(gone, Map.empty)
+        assertEquals(kept, Map(rota.id -> "Rota"))
         assertEquals(
           held,
           List(model.Grant(
@@ -225,23 +253,6 @@ class OwnershipSuite extends CatsEffectSuite:
             Access.Own,
           )),
         )
-
-  test("an account takes the groups only its own groups own"):
-    withStores("owned-by-owned"): world =>
-      import world.*
-      for
-        owner <- register(users, "owner")
-        board <- groups.create(owner.id, GroupDetails("Board"))
-        panel <- groups.create(owner.id, GroupDetails("Panel"))
-        _     <- give(
-          Resource.group(panel.id),
-          Principal.Group(board.id),
-          Access.Own,
-        )
-        _    <- db.run(grantsOf(panel.id, Principal.Person(owner.id)).delete)
-        _    <- accounts.delete(owner.id)
-        gone <- groups.names(Seq(board.id, panel.id))
-      yield assertEquals(gone, Map.empty)
 
   test("deleting a group lifts a nested group someone else owns"):
     withStores("lift"): world =>
@@ -297,38 +308,39 @@ class OwnershipSuite extends CatsEffectSuite:
           leader.id,
           GroupDetails("Squad", Some(all.id)),
         )
-        _     <- enrol(groups, leader, squad.id, member)
-        found <- groups.addressersOf(member.id)
-      yield assertEquals(found, Set(head.id, leader.id))
+        _      <- enrol(groups, leader, squad.id, member)
+        found  <- groups.addressersOf(member.id)
+        nobody <- groups.addressersOf(head.id)
+        within <- groups.membersWithin(Seq(all.id))
+        none   <- groups.membersWithin(Seq.empty)
+      yield
+        assertEquals(found, Set(head.id, leader.id))
+        assertEquals(nobody, Set.empty)
+        assertEquals(within, List(member.id))
+        assertEquals(none, List.empty)
 
-  test("nesting needs the right to change the parent"):
-    withStores("nest"): world =>
+  test("only a confirmed operator address acts for, and holds as, the system"):
+    withStores(
+      "operators",
+      Set("Ops@Example.com", "two@example.com"),
+    ): world =>
       import world.*
-      for
-        owner    <- register(users, "owner")
-        stranger <- register(users, "stranger")
-        top      <- groups.create(owner.id, GroupDetails("Top"))
-        refused  <- refusal(groups.create(
-          stranger.id,
-          GroupDetails("Inside", Some(top.id)),
-        ))
-      yield assertEquals(
-        refused,
-        said(AuthRefusal.ParentGroupMissing),
-      )
-
-  test("only a confirmed operator address acts for the system"):
-    withStores("operators", Set("Ops@Example.com")): world =>
-      import world.*
+      val document = Resource("document", 1)
       for
         operator <- register(users, "operator")
+        two      <- register(users, "two")
         pending  <- register(users, "pending")
         _        <- confirm(operator, "ops@example.com")
+        _        <- confirm(two, "two@example.com")
+        _        <- give(document, Principal.System, Access.Own)
         acting   <- groups.principalsOf(operator.id)
         others   <- groups.principalsOf(pending.id)
         mayGive  <- groups.mayAddress(operator.id, Principal.System)
         mayNot   <- groups.mayAddress(pending.id, Principal.System)
         listed   <- groups.addressable(operator.id)
+        held     <- permissions.access(operator.id, document)
+        theirs   <- permissions.access(pending.id, document)
+        holders  <- permissions.holders(document)
       yield
         assertEquals(
           acting,
@@ -350,56 +362,10 @@ class OwnershipSuite extends CatsEffectSuite:
             Principal.System,
           ),
         )
-
-  test("whatever the system holds, every operator holds"):
-    withStores(
-      "system-grant",
-      Set("one@example.com", "two@example.com"),
-    ): world =>
-      import world.*
-      val document = Resource("document", 1)
-      for
-        one     <- register(users, "one")
-        two     <- register(users, "two")
-        other   <- register(users, "other")
-        _       <- confirm(one, "one@example.com")
-        _       <- confirm(two, "two@example.com")
-        _       <- give(document, Principal.System, Access.Own)
-        ones    <- permissions.access(one.id, document)
-        theirs  <- permissions.access(other.id, document)
-        holders <- permissions.holders(document)
-      yield
-        assertEquals(ones, Some(Access.Own))
+        // Whatever the system holds, every operator holds.
+        assertEquals(held, Some(Access.Own))
         assertEquals(theirs, None)
-        assertEquals(holders, Set(one.id, two.id))
-
-  test("a group the system owns outlives the operator who made it"):
-    withStores("system-group", Set("ops@example.com")): world =>
-      import world.*
-      for
-        operator <- register(users, "operator")
-        _        <- confirm(operator, "ops@example.com")
-        panel    <- groups.create(operator.id, GroupDetails("Panel"))
-        _        <- give(
-          Resource.group(panel.id),
-          Principal.System,
-          Access.Own,
-        )
-        _ <- db.run(
-          grantsOf(
-            panel.id,
-            Principal.Person(operator.id),
-          ).delete,
-        )
-        managing <- groups.managed(operator.id)
-        _        <- accounts.delete(operator.id)
-        left     <- groups.names(Seq(panel.id))
-      yield
-        assertEquals(
-          managing.map(_.access),
-          List(Access.Own),
-        )
-        assertEquals(left, Map(panel.id -> "Panel"))
+        assertEquals(holders, Set(operator.id, two.id))
 
 object OwnershipSuite:
 

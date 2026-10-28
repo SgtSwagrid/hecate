@@ -42,7 +42,7 @@ class LinkServiceSuite extends CatsEffectSuite:
           List(reader.id),
         )
 
-  test("a replaced or turned-off link leads nowhere"):
+  test("a replaced or turned-off link, or text that is no code, leads nowhere"):
     served(): world =>
       for
         owner   <- world.signUp("owner")
@@ -54,6 +54,9 @@ class LinkServiceSuite extends CatsEffectSuite:
         _       <- world.groups.unlink(owner.id, team.id)
         off     <- world.service.follow(reader, fresh)
         members <- world.groups.managed(owner.id)
+        wrong   <- world.service.preview(reader, "ab-12")
+        short   <- world.service.preview(reader, "abc")
+        long    <- world.service.preview(reader, "abcd1" * 1000)
       yield
         assertEquals(stale, Left(AuthRefusal.LinkMissing))
         assertEquals(off, Left(AuthRefusal.LinkMissing))
@@ -61,26 +64,16 @@ class LinkServiceSuite extends CatsEffectSuite:
           members.flatMap(_.members),
           List.empty[User],
         )
-
-  test("text that could not be a code leads nowhere"):
-    served(): world =>
-      for
-        reader <- world.signUp("reader")
-        wrong  <- world.service.preview(reader, "ab-12")
-        short  <- world.service.preview(reader, "abc")
-        long   <- world.service.preview(reader, "abcd1" * 1000)
-      yield
-        assertEquals(
-          wrong.map(_.name),
-          Left(AuthRefusal.LinkMissing),
-        )
-        assertEquals(
-          short.map(_.name),
-          Left(AuthRefusal.LinkMissing),
-        )
-        assertEquals(
-          long.map(_.name),
-          Left(AuthRefusal.LinkMissing),
+        List(
+          "malformed" -> wrong,
+          "short"     -> short,
+          "long"      -> long,
+        ).foreach((text, preview) =>
+          assertEquals(
+            preview.map(_.name),
+            Left(AuthRefusal.LinkMissing),
+            text,
+          ),
         )
 
   test("following a resource's link grants its access, and never lowers any"):
@@ -108,7 +101,7 @@ class LinkServiceSuite extends CatsEffectSuite:
         assertEquals(readers, Some(Access.View))
         assertEquals(editors, Some(Access.Edit))
 
-  test("a link to a resource that is gone leads nowhere, and grants nothing"):
+  test("a link to a resource gone, or that nobody holds, leads nowhere"):
     served(): world =>
       for
         owner  <- world.signUp("owner")
@@ -120,25 +113,17 @@ class LinkServiceSuite extends CatsEffectSuite:
         )
         followed <- world.service.follow(reader, code)
         held     <- world.accessOf(reader, Resource("book", 404))
+        // Withdrawing every grant over a resource turns its link off.
+        withdrawn <- world.share(owner, Access.View)
+        _         <- world.db.run(world.grants.revokeOver(book))
+        off       <- world.service.follow(reader, withdrawn)
       yield
         assertEquals(
           followed,
           Left(AuthRefusal.LinkMissing),
         )
         assertEquals(held, None)
-
-  test("withdrawing every grant over a resource turns its link off"):
-    served(): world =>
-      for
-        owner    <- world.signUp("owner")
-        reader   <- world.signUp("reader")
-        code     <- world.share(owner, Access.View)
-        _        <- world.db.run(world.grants.revokeOver(book))
-        followed <- world.service.follow(reader, code)
-      yield assertEquals(
-        followed,
-        Left(AuthRefusal.LinkMissing),
-      )
+        assertEquals(off, Left(AuthRefusal.LinkMissing))
 
   test(
     "someone who tries too many codes that lead nowhere is refused every one",
@@ -165,7 +150,7 @@ class LinkServiceSuite extends CatsEffectSuite:
           Right("Book club"),
         )
 
-  test("a stranger follows a group's link as a guest, joining it signed in"):
+  test("a stranger follows a link as a guest, signed in to what it leads to"):
     served(): world =>
       for
         owner <- world.signUp("owner")
@@ -180,6 +165,9 @@ class LinkServiceSuite extends CatsEffectSuite:
         (guest, target, session) = made.toOption.get
         found   <- world.auth.current(Some(session.token))
         members <- world.groups.managed(owner.id)
+        shared  <- world.share(owner, Access.Edit)
+        sharer  <- world.service.welcome(shared, "Editor")
+        held    <- world.accessOf(sharer.toOption.get._1)
       yield
         assertEquals(
           (guest.username, guest.guest, target),
@@ -190,17 +178,8 @@ class LinkServiceSuite extends CatsEffectSuite:
           members.flatMap(_.members.map(_.id)),
           List(guest.id),
         )
-
-  test("a stranger follows a resource's link as a guest, granted its access"):
-    served(): world =>
-      for
-        owner <- world.signUp("owner")
-        code  <- world.share(owner, Access.Edit)
-        made  <- world.service.welcome(code, "Reader")
-        held  <- world.accessOf(made.toOption.get._1)
-      yield
         assertEquals(
-          made.map(_._2),
+          sharer.map(_._2),
           Right(LinkTarget.Sharing(book, Access.Edit)),
         )
         assertEquals(held, Some(Access.Edit))
@@ -230,8 +209,8 @@ class LinkServiceSuite extends CatsEffectSuite:
         )
         assertEquals(found, None)
 
-  test("strangers who try too many codes that lead nowhere pause guests alone"):
-    served(strangerGuesses = 2): world =>
+  test("strangers past their own allowance of misses pause guests alone"):
+    served(guesses = 1, strangerGuesses = 3): world =>
       for
         owner <- world.signUp("owner")
         other <- world.signUp("reader")
@@ -239,9 +218,16 @@ class LinkServiceSuite extends CatsEffectSuite:
         wrong = otherThan(code)
         _          <- world.service.welcome(wrong, "Guesser")
         _          <- world.service.welcome(wrong, "Guesser")
+        within     <- world.service.welcome(code, "Reader")
+        _          <- world.service.welcome(wrong, "Guesser")
         paused     <- world.service.welcome(code, "Reader")
         unaffected <- world.service.follow(other, code)
       yield
+        // Strangers are held to their own allowance, never to a user's.
+        assertEquals(
+          within.map(_._2),
+          Right(LinkTarget.Sharing(book, Access.View)),
+        )
         assertEquals(
           paused.map(_._1),
           Left(AuthRefusal.GuestsPaused),
@@ -250,20 +236,6 @@ class LinkServiceSuite extends CatsEffectSuite:
           unaffected,
           Right(LinkTarget.Sharing(book, Access.View)),
         )
-
-  test("strangers are held to their own allowance, never to a user's"):
-    served(guesses = 1, strangerGuesses = 3): world =>
-      for
-        owner <- world.signUp("owner")
-        code  <- world.share(owner, Access.View)
-        wrong = otherThan(code)
-        _      <- world.service.welcome(wrong, "Guesser")
-        _      <- world.service.welcome(wrong, "Guesser")
-        within <- world.service.welcome(code, "Reader")
-      yield assertEquals(
-        within.map(_._2),
-        Right(LinkTarget.Sharing(book, Access.View)),
-      )
 
   test("nobody follows a link as a guest where guests are not let in"):
     served(guests = false): world =>

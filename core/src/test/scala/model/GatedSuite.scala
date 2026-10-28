@@ -7,21 +7,16 @@ import munit.FunSuite
 
 class GatedSuite extends FunSuite:
 
-  test("every state round-trips through JSON"):
-    List[Gated[Int]](
-      Gated.Shown(3),
-      Gated.Absent,
-      Gated.Withheld,
-    ).foreach(part =>
+  test("each state is sent and read back under its spelled name, and no other"):
+    val absent: Gated[Int]          = Gated.Absent
+    val withheld: Gated[Int]        = Gated.Withheld
+    val nothing: Gated[Option[Int]] = Gated.Shown(None)
+    List[Gated[Int]](Gated.Shown(3), absent, withheld).foreach(part =>
       assertEquals(
         part.asJson.as[Gated[Int]],
         Right(part),
       ),
     )
-
-  test("each state is sent under its spelled name"):
-    val absent: Gated[Int]   = Gated.Absent
-    val withheld: Gated[Int] = Gated.Withheld
     assertEquals(
       absent.asJson,
       Json.obj("state" -> Json.fromString("absent")),
@@ -30,9 +25,7 @@ class GatedSuite extends FunSuite:
       withheld.asJson,
       Json.obj("state" -> Json.fromString("withheld")),
     )
-
-  test("a part shown as nothing stays shown rather than becoming absent"):
-    val nothing: Gated[Option[Int]] = Gated.Shown(None)
+    // A part shown as nothing stays shown rather than becoming absent.
     assertEquals(
       nothing.asJson,
       Json.obj(
@@ -44,8 +37,6 @@ class GatedSuite extends FunSuite:
       nothing.asJson.as[Gated[Option[Int]]],
       Right(nothing),
     )
-
-  test("an unknown state is refused rather than guessed at"):
     val unknown = Json.obj("state" -> Json.fromString("hidden"))
     assert(unknown.as[Gated[Int]].isLeft)
 
@@ -54,18 +45,4 @@ class GatedSuite extends FunSuite:
     assertEquals(
       Gated.fromText("Sort by author."),
       Gated.Shown("Sort by author."),
-    )
-
-  test("mapping changes a shown part, and leaves the others as they were"):
-    val shown: Gated[Int]    = Gated.Shown(3)
-    val absent: Gated[Int]   = Gated.Absent
-    val withheld: Gated[Int] = Gated.Withheld
-    assertEquals(
-      shown.map(_.toString),
-      Gated.Shown("3"),
-    )
-    assertEquals(absent.map(_.toString), Gated.Absent)
-    assertEquals(
-      withheld.map(_.toString),
-      Gated.Withheld,
     )

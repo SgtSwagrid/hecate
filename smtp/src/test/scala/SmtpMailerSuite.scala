@@ -35,7 +35,7 @@ class SmtpMailerSuite extends CatsEffectSuite:
           mail.body.stripTrailing,
         )
 
-  test("A mail server that asks for a login is signed in to."):
+  test("A login signs in where the server asks for one, and is never shown."):
     server(
       GreenMailConfiguration
         .aConfig()
@@ -51,10 +51,12 @@ class SmtpMailerSuite extends CatsEffectSuite:
           Some(SmtpLogin("mailer", "secret")),
         )).send(mail)
         received <- delivered(server)
-      yield assertEquals(
-        received.map(_.getSubject),
-        List(mail.subject),
-      )
+      yield
+        assertEquals(
+          received.map(_.getSubject),
+          List(mail.subject),
+        )
+        assert(!SmtpLogin("mailer", "secret").toString.contains("secret"))
 
   test("A mail server that cannot be reached fails the mail."):
     for
@@ -72,9 +74,6 @@ class SmtpMailerSuite extends CatsEffectSuite:
       sent.isLeft,
       "a mail was sent to nothing",
     )
-
-  test("A login is never written out with its password."):
-    assert(!SmtpLogin("mailer", "secret").toString.contains("secret"))
 
 object SmtpMailerSuite:
 
