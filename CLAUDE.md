@@ -141,25 +141,43 @@ See [README.md](README.md) for how a host wires it up.
 
 ### Where this code lives
 
-This repository is a mirror. The library is developed inside a larger private project, beneath `hecate/`, and every file
-here is copied from there by [GitHub Graph](https://github.com/SgtSwagrid/github-graph) whenever that project's `main`
-changes, overwriting whatever is here. So make changes there, never here. The shared configuration (workflows, Scalafmt, IDE settings, `project/plugins-*.sbt`
-other than `plugins-scalajs.sbt`) comes from further upstream still, in
-[Scala Library Config](https://github.com/SgtSwagrid/scala-library-config), which syncs into the private project's `hecate/` first.
-`build.sbt`, `release.sbt`, `project/Dependencies.scala`, `README.md` and this file belong to the library.
+Hecate is developed here: make every change in this repository, by pull request. The shared configuration (workflows,
+Scalafmt, IDE settings, `project/plugins-common.sbt`, `project/plugins-library.sbt`, `LICENSE.md`, `CONTRIBUTING.md`)
+is synced into it from [Scala Library Config](https://github.com/SgtSwagrid/scala-library-config) by
+[GitHub Graph](https://github.com/SgtSwagrid/github-graph), which overwrites local edits, so change those files there.
+`build.sbt`, `release.sbt`, `project/Dependencies.scala`, `project/plugins-scalajs.sbt`, `README.md`, this file and the
+sources belong to the library.
+
+Other projects use Hecate as a dependency from Maven Central, never from source, so a change one of them needs reaches
+it only through a release (below).
 
 ### Build
 
 - `hecateCore` and `hecateTapir` are `projectMatrix`es (JVM + JS; the JS rows are `hecateCoreJS` and `hecateTapirJS`),
   `hecateServer`, `hecateServerTapir` and `hecateSmtp` are JVM (`hecateServerTapir` depends on `hecateServer`'s tests
   too, for `TestDb` and `Fixtures`), `hecateClient` is Scala.js, and the root project `hecate` only aggregates them and is never published.
-- Project ids are prefixed with the library's name because the private project includes this build by reference
-  (`ProjectRef(file("hecate"), ...)`), and its own projects are called `server`, `client` and `common`.
+- Project ids are prefixed with the library's name (`hecateCore`, ...), so that a build including this one by reference
+  keeps names such as `server`, `client` and `common` free for its own projects.
 - Each matrix pins `sourceDirectory` to `(ThisBuild / baseDirectory) / "<module>" / "src"`. Don't remove it: sbt 2.0.8
-  resolves a matrix's sources against the working directory, which is the host's when the build is included by reference,
+  resolves a matrix's sources against the working directory, which is not this build's when another includes it,
   and the library then compiles to an empty JAR without a single error of its own.
-- The library must never depend on anything in the project that includes it, and nothing here should assume a host, a database or a JDBC profile.
-- Versions come from git tags (`sbt-ci-release`); publishing a GitHub release publishes to Maven Central.
+- Nothing here should assume a host, a database or a JDBC profile.
+- Versions come from git tags (`sbt-ci-release`); publishing a GitHub release publishes to Maven Central (*Releases*
+  below).
+
+### Releases
+
+1. Land the changes on `main` by pull request, the last of them setting the README's installation lines to the new
+   version. Hecate is in beta, versioned by early semver (`versionScheme`): while it is `0.x`, the minor version goes
+   up for any change that can break a user's build or behaviour, and the patch version for anything else.
+2. Publish a GitHub release of `main` tagged `v<version>`, with notes written for a user, as the earlier releases' are
+   (the installation lines, then what is Changed, Added and Fixed). `publish.yml` then publishes
+   `hecate-core` and `hecate-tapir` (each for the JVM and JS), `hecate-server`, `hecate-server-tapir`,
+   `hecate-smtp` and `hecate-client` to Maven Central through `sbt-ci-release`, which takes the version from the tag, and `docs.yml`
+   publishes the Scaladoc at [alecdorrington.com/hecate](https://alecdorrington.com/hecate/).
+3. Once Maven Central serves the new version, bump it in each project using Hecate, by pull request there. Their
+   Scala Steward would otherwise propose it on its next weekly run. A version that breaks callers needs their code
+   changed too.
 
 ## Instructions
 

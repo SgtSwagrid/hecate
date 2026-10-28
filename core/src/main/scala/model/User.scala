@@ -10,9 +10,9 @@ import io.circe.Codec
   *   The identifier of the user, assigned by the store.
   *
   * @param username
-  *   The unique name the user signs in with, compared exactly (`Alice` and
-  *   `alice` are different users). A guest's is the name they gave, numbered if
-  *   taken.
+  *   The unique name the user signs in with, shown as chosen but matched
+  *   whatever its letter case (`Alice` signs in as `alice`). A guest's is the
+  *   name they gave, numbered if taken.
   *
   * @param guest
   *   Whether this is a guest: an account made to follow an invite link, with no
