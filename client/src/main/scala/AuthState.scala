@@ -10,7 +10,6 @@ import com.alecdorrington.hecate.model.{
 import com.raquo.laminar.api.L.*
 import io.circe.{Decoder, Encoder}
 import io.circe.parser.decode
-import io.laminext.fetch.circe.*
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.scalajs.js.URIUtils.encodeURIComponent
 
@@ -101,7 +100,7 @@ final class AuthState(wording: Wording = Wording.english):
   locally:
     probe(0)
     user
-      .changes
+      .updates
       .foreach: found =>
         recoveryCodesVar.set(None)
         if found.isDefined then refreshAccount()
@@ -169,14 +168,10 @@ final class AuthState(wording: Wording = Wording.english):
     *   The callback given the link's target just before the guest is signed in.
     */
   def welcome(code: String, name: String)(arrived: LinkTarget => Unit): Unit =
-    perform(
-      Fetch
-        .post(
-          s"/api/invite-links/${ encodeURIComponent(code) }/welcome",
-          body = Guest(name),
-        )
-        .text,
-    ): response =>
+    perform(Fetch.post(
+      s"/api/invite-links/${ encodeURIComponent(code) }/welcome",
+      body = Guest(name),
+    )): response =>
       adopt[Welcome](response): welcome =>
         arrived(welcome.target)
         userVar.set(Some(welcome.user))
@@ -229,14 +224,10 @@ final class AuthState(wording: Wording = Wording.english):
     * @param address
     *   The email address.
     */
-  def requestPasswordReset(address: String): Unit = perform(
-    Fetch
-      .post(
-        "/api/auth/password/request-reset",
-        body = PasswordResetRequest(address),
-      )
-      .text,
-  )(_ => noticeVar.set(Some(wording.resetLinkSent)))
+  def requestPasswordReset(address: String): Unit = perform(Fetch.post(
+    "/api/auth/password/request-reset",
+    body = PasswordResetRequest(address),
+  ))(_ => noticeVar.set(Some(wording.resetLinkSent)))
 
   /**
     * Resets a forgotten password with a link sent by email and signs in,
@@ -269,14 +260,10 @@ final class AuthState(wording: Wording = Wording.english):
       address: Option[String],
       password: String,
     )
-    : Unit = perform(
-    Fetch
-      .put(
-        "/api/auth/email",
-        body = EmailChange(address, password),
-      )
-      .text,
-  ): response =>
+    : Unit = perform(Fetch.put(
+    "/api/auth/email",
+    body = EmailChange(address, password),
+  )): response =>
     adoptEmail(response)(status =>
       status
         .pending
@@ -286,7 +273,7 @@ final class AuthState(wording: Wording = Wording.english):
 
   /** Sends a new link to the address awaiting confirmation. */
   def resendConfirmation(): Unit = perform(
-    Fetch.post("/api/auth/email/resend").text,
+    Fetch.post("/api/auth/email/resend"),
   )(adoptEmail(_)(_.pending.map(wording.confirmationSent)))
 
   /**
@@ -295,21 +282,17 @@ final class AuthState(wording: Wording = Wording.english):
     * @param token
     *   The secret the link carries.
     */
-  def confirmEmail(token: String): Unit = perform(
-    Fetch
-      .post(
-        "/api/auth/email/confirm",
-        body = EmailConfirmation(token),
-      )
-      .text,
-  ): _ =>
+  def confirmEmail(token: String): Unit = perform(Fetch.post(
+    "/api/auth/email/confirm",
+    body = EmailConfirmation(token),
+  )): _ =>
     noticeVar.set(Some(wording.emailConfirmed))
     if userVar.now().isDefined then refreshEmail()
 
   /** Signs out, closing the session on the server. */
   def signOut(): Unit =
     clearMessages()
-    Outcome.once(Outcome.of(Fetch.post("/api/auth/sign-out").text))(_ =>
+    Outcome.once(Outcome.of(Fetch.post("/api/auth/sign-out")))(_ =>
       userVar.set(None),
     )
 
@@ -322,14 +305,11 @@ final class AuthState(wording: Wording = Wording.english):
     * @param replacement
     *   The new password.
     */
-  def changePassword(current: String, replacement: String): Unit = perform(
-    Fetch
-      .put(
-        "/api/auth/password",
-        body = PasswordChange(current, replacement),
-      )
-      .text,
-  )(_ => noticeVar.set(Some(wording.passwordChanged)))
+  def changePassword(current: String, replacement: String): Unit =
+    perform(Fetch.put(
+      "/api/auth/password",
+      body = PasswordChange(current, replacement),
+    ))(_ => noticeVar.set(Some(wording.passwordChanged)))
 
   /**
     * Generates a new set of recovery codes, shown in [[recoveryCodes]],
@@ -338,14 +318,10 @@ final class AuthState(wording: Wording = Wording.english):
     * @param password
     *   The signed-in user's password.
     */
-  def generateRecoveryCodes(password: String): Unit = perform(
-    Fetch
-      .post(
-        "/api/auth/recovery-codes",
-        body = PasswordCheck(password),
-      )
-      .text,
-  ): response =>
+  def generateRecoveryCodes(password: String): Unit = perform(Fetch.post(
+    "/api/auth/recovery-codes",
+    body = PasswordCheck(password),
+  )): response =>
     adopt[RecoveryCodes](response): codes =>
       recoveryCodesVar.set(Some(codes.codes))
       recoveryCodesLeftVar.set(Some(codes.codes.size))
@@ -359,14 +335,10 @@ final class AuthState(wording: Wording = Wording.english):
     * @param password
     *   The user's password, not read for a guest.
     */
-  def deleteAccount(password: String): Unit = perform(
-    Fetch
-      .post(
-        "/api/auth/account/delete",
-        body = PasswordCheck(password),
-      )
-      .text,
-  )(_ => userVar.set(None))
+  def deleteAccount(password: String): Unit = perform(Fetch.post(
+    "/api/auth/account/delete",
+    body = PasswordCheck(password),
+  ))(_ => userVar.set(None))
 
   /**
     * Asks the server again who is signed in, for a host whose secured request
@@ -407,9 +379,7 @@ final class AuthState(wording: Wording = Wording.english):
     * @return
     *   A stream of its one outcome.
     */
-  def outcome
-    (request: EventStream[FetchResponse[String]])
-    : EventStream[Outcome] = Outcome
+  def outcome(request: EventStream[Response]): EventStream[Outcome] = Outcome
     .of(request)
     .map: outcome =>
       outcome match
@@ -431,7 +401,7 @@ final class AuthState(wording: Wording = Wording.english):
     *   A stream of the answer, or the reason there is none.
     */
   def explained[X : Decoder]
-    (request: EventStream[FetchResponse[String]])
+    (request: EventStream[Response])
     : EventStream[Either[String, X]] = outcome(request).map:
     case Outcome.Answered(response) =>
       decode[X](if response.data.isBlank then "null" else response.data)
@@ -448,7 +418,7 @@ final class AuthState(wording: Wording = Wording.english):
     Outcome.once(fetched("/api/auth/email")(decoded[EmailStatus]))(emailVar.set)
 
   private def adoptEmail
-    (response: FetchResponse[String])
+    (response: Response)
     (notice: EmailStatus => Option[String])
     : Unit = adopt[EmailStatus](response): status =>
     emailVar.set(Some(status))
@@ -464,14 +434,14 @@ final class AuthState(wording: Wording = Wording.english):
       body: X,
       notice: Option[String] = None,
     )
-    : Unit = perform(Fetch.post(url, body = body).text): response =>
+    : Unit = perform(Fetch.post(url, body = body)): response =>
     adopt[User](response): user =>
       userVar.set(Some(user))
       if notice.isDefined then noticeVar.set(notice)
 
   private def perform
-    (request: EventStream[FetchResponse[String]])
-    (succeeded: FetchResponse[String] => Unit)
+    (request: EventStream[Response])
+    (succeeded: Response => Unit)
     : Unit =
     clearMessages()
     Outcome.tracked(Outcome.of(request), pendingVar):
@@ -486,29 +456,24 @@ final class AuthState(wording: Wording = Wording.english):
   /** `None` when the request never reaches the server. */
   private def fetched[X]
     (url: String)
-    (read: FetchResponse[String] => Option[X])
+    (read: Response => Option[X])
     : EventStream[Option[X]] = Fetch
     .get(url)
-    .text
     .map(read)
     .recover { case _ => Some(None) }
 
-  private def adopt[X : Decoder]
-    (response: FetchResponse[String])
-    (use: X => Unit)
-    : Unit =
+  private def adopt[X : Decoder](response: Response)(use: X => Unit): Unit =
     decoded[X](response).fold(errorVar.set(Some(wording.unreadableReply)))(use)
 
   // Nobody signed in is sent as an empty body, not `null`, which would
   // otherwise read as no answer and leave an ended session unnoticed.
-  private def signedIn(response: FetchResponse[String]): Option[Option[User]] =
+  private def signedIn(response: Response): Option[Option[User]] =
     if response.status < 400 && response.data.isBlank then Some(None)
     else decoded[Option[User]](response)
 
-  private def decoded[X : Decoder](response: FetchResponse[String]): Option[X] =
-    Option
-      .when(response.status < 400)(decode[X](response.data).toOption)
-      .flatten
+  private def decoded[X : Decoder](response: Response): Option[X] = Option
+    .when(response.status < 400)(decode[X](response.data).toOption)
+    .flatten
 
 object AuthState:
 

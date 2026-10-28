@@ -3,7 +3,6 @@ package client
 
 import com.raquo.airstream.ownership.ManualOwner
 import com.raquo.laminar.api.L.*
-import io.laminext.fetch.circe.*
 
 /**
   * An outcome of one request. The three must not be conflated: a refusal tells
@@ -17,7 +16,7 @@ enum Outcome:
     * @param response
     *   The reply.
     */
-  case Answered(response: FetchResponse[String])
+  case Answered(response: Response)
 
   /**
     * The server refused.
@@ -47,13 +46,12 @@ object Outcome:
     * @return
     *   A stream of its one outcome.
     */
-  def of(request: EventStream[FetchResponse[String]]): EventStream[Outcome] =
-    request
-      .map(response =>
-        if response.status >= 400 then Refused(response.data)
-        else Answered(response),
-      )
-      .recover { case failure => Some(Unreachable(failure.getMessage)) }
+  def of(request: EventStream[Response]): EventStream[Outcome] = request
+    .map(response =>
+      if response.status >= 400 then Refused(response.data)
+      else Answered(response),
+    )
+    .recover { case failure => Some(Unreachable(failure.getMessage)) }
 
   private[client] def tracked
     (

@@ -106,6 +106,10 @@ for full stack websites built on Slick, Cats Effect and Laminar, and optionally 
   session is refused with the same status as anything else. A request a state outliving every view makes goes
   through `Outcome.once` (or `Outcome.tracked`, which also marks it in flight), which lets go of it once it has
   answered; never `foreach` one on the window owner, which would keep every finished request subscribed.
+  Requests are made with the library's own `Fetch`, on the browser's `fetch` (laminext's has no release for Laminar
+  18): each a stream that sends when started and emits one `Response`, a status and text, or an error if no reply
+  comes, `Outcome.Unreachable`. A body is sent as JSON, and a request is aborted when its stream stops unless it is
+  `keepalive`.
 
 The library tells the host whom each change it makes concerns, never what changed, through the `affected:
 Affected => IO[Unit]` hook of `GroupService`, `LinkService`, `SharingService` and `AuthService` (default: tell nobody), once the
