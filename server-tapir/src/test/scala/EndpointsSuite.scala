@@ -26,13 +26,29 @@ class EndpointsSuite extends CatsEffectSuite:
 
   import EndpointsSuite.*
 
-  test("registering sets the session cookie, which signs its owner in"):
+  test("registering sets the session cookie, which signs in until signing out"):
     served(): call =>
       for
+        before  <- call(me)
+        refused <-
+          call(basicRequest.get(uri"http://test/api/auth/recovery-codes"))
         registered <- call(register("alice"))
         token = cookieOf(registered).get
         found <- call(me.cookie(Protocol.sessionCookie, token))
+        out   <- call(
+          basicRequest
+            .post(uri"http://test/api/auth/sign-out")
+            .cookie(Protocol.sessionCookie, token),
+        )
+        after <- call(me.cookie(Protocol.sessionCookie, token))
       yield
+        // Nobody is signed in without the cookie, so nothing needing a user is
+        // served.
+        assertEquals(before.body, Right(nobody))
+        assertEquals(
+          refused.body,
+          Left(Wording.english.signedOut),
+        )
         assertEquals(
           read[User](registered).map(_.username),
           Right("alice"),
@@ -41,23 +57,6 @@ class EndpointsSuite extends CatsEffectSuite:
           read[Option[User]](found).map(_.map(_.username)),
           Right(Some("alice")),
         )
-
-  test("nobody is signed in without the cookie"):
-    served(): call =>
-      call(me).map(answer => assertEquals(answer.body, Right(nobody)))
-
-  test("signing out closes the session, and clears the cookie"):
-    served(): call =>
-      for
-        registered <- call(register("alice"))
-        token = cookieOf(registered).get
-        out <- call(
-          basicRequest
-            .post(uri"http://test/api/auth/sign-out")
-            .cookie(Protocol.sessionCookie, token),
-        )
-        after <- call(me.cookie(Protocol.sessionCookie, token))
-      yield
         assertEquals(cookieOf(out), None)
         assertEquals(
           out.unsafeCookies.find(_.name == Protocol.sessionCookie).map(_.value),
@@ -66,13 +65,12 @@ class EndpointsSuite extends CatsEffectSuite:
         assertEquals(after.body, Right(nobody))
 
   test("a refusal is a bad request, worded in the language it asks for"):
-    served(wording =
-      locale => if locale.contains("de") then German else Wording.english,
-    ): call =>
+    served(wording = bilingual): call =>
       for
         _       <- call(register("alice"))
         english <- call(register("alice"))
         german  <- call(register("alice").cookie(Protocol.languageCookie, "de"))
+        long    <- call(register("a" * (Protocol.maxNameLength + 1)))
       yield
         assertEquals(english.code, StatusCode.BadRequest)
         assertEquals(
@@ -84,51 +82,44 @@ class EndpointsSuite extends CatsEffectSuite:
           Left(German.usernameTaken),
         )
         assertEquals(cookieOf(german), None)
+        // Text longer than the protocol allows is refused before it is read.
+        assertEquals(long.code, StatusCode.BadRequest)
 
-  test("an endpoint that needs a user refuses when there is none"):
+  test("the rules say what the service offers, and nothing else is served"):
     served(): call =>
-      call(basicRequest.get(uri"http://test/api/auth/recovery-codes")).map(
-        answer =>
-          assertEquals(
-            answer.body,
-            Left(Wording.english.signedOut),
-          ),
-      )
-
-  test("text longer than the protocol allows is refused before it is read"):
-    served(): call =>
-      call(
-        register("a" * (Protocol.maxNameLength + 1)),
-      ).map(answer => assertEquals(answer.code, StatusCode.BadRequest))
-
-  test("the rules say what the policy is, and what the service offers"):
-    served(): call =>
-      call(basicRequest.get(uri"http://test/api/auth/rules")).map(answer =>
+      for
+        rules    <- call(basicRequest.get(uri"http://test/api/auth/rules"))
+        deletion <- call(
+          basicRequest
+            .post(uri"http://test/api/auth/account/delete")
+            .body("""{"password":"hunter2222"}"""),
+        )
+        email   <- call(resetRequest("alice@example.com"))
+        welcome <- call(
+          basicRequest
+            .post(uri"http://test/api/invite-links/abcd1/welcome")
+            .body(Guest("Reader").asJson.noSpaces),
+        )
+      yield
         assertEquals(
-          answer.body,
+          rules.body,
           Right(
             """{"minPasswordLength":8,"accountDeletion":false,"email":false,"guests":false}""",
           ),
-        ),
-      )
-
-  test("account deletion is not served at all without a store for it"):
-    served(): call =>
-      call(
-        basicRequest
-          .post(uri"http://test/api/auth/account/delete")
-          .body("""{"password":"hunter2222"}"""),
-      ).map(answer => assertEquals(answer.code, StatusCode.NotFound))
-
-  test("email is not served at all where the service sends none"):
-    served(): call =>
-      call(
-        resetRequest("alice@example.com"),
-      ).map(answer => assertEquals(answer.code, StatusCode.NotFound))
+        )
+        // Account deletion without a store for it, email where the service
+        // sends none, and guests where they are not let in.
+        assertEquals(
+          List(deletion, email, welcome).map(_.code),
+          List.fill(3)(StatusCode.NotFound),
+        )
 
   test("a reset link signs in, and asking for one answers alike for anyone"):
     Outbox().flatMap(outbox =>
-      served(mailing = Some(Outbox.mailing(outbox))): call =>
+      served(
+        wording = bilingual,
+        mailing = Some(Outbox.mailing(outbox)),
+      ): call =>
         for
           token   <- call(register("alice")).map(cookieOf(_).get)
           changed <- call(
@@ -162,6 +153,12 @@ class EndpointsSuite extends CatsEffectSuite:
                   .noSpaces,
               ),
           )
+          broken <- call(
+            basicRequest
+              .post(uri"http://test/api/auth/password/reset")
+              .cookie(Protocol.languageCookie, "de")
+              .body(PasswordReset("nothing", "correct-horse").asJson.noSpaces),
+          )
         yield
           assertEquals(
             read[EmailStatus](changed),
@@ -179,61 +176,40 @@ class EndpointsSuite extends CatsEffectSuite:
           assert(
             cookieOf(reset).isDefined,
             "no session cookie was set",
-          ),
-    )
-
-  test("a link that does not work is refused in the reader's language"):
-    Outbox().flatMap(outbox =>
-      served(
-        wording =
-          locale => if locale.contains("de") then German else Wording.english,
-        mailing = Some(Outbox.mailing(outbox)),
-      ): call =>
-        call(
-          basicRequest
-            .post(uri"http://test/api/auth/password/reset")
-            .cookie(Protocol.languageCookie, "de")
-            .body(PasswordReset("nothing", "correct-horse").asJson.noSpaces),
-        ).map(answer =>
+          )
+          // A link that does not work is refused in the reader's language.
           assertEquals(
-            (answer.code, answer.body),
+            (broken.code, broken.body),
             (StatusCode.BadRequest, Left(German.emailLinkMissing)),
           ),
-        ),
     )
 
-  test("a group is made and listed on behalf of the session's user"):
+  test("a group is made and listed for its owner, and its link joins it"):
     served(): call =>
       for
-        registered <- call(register("alice"))
-        token = cookieOf(registered).get
-        _      <- bookClub(call, token)
+        owner  <- call(register("owner")).map(cookieOf(_).get)
+        guest  <- call(register("guest")).map(cookieOf(_).get)
+        group  <- bookClub(call, owner)
         listed <- call(
           basicRequest
             .get(uri"http://test/api/groups")
-            .cookie(Protocol.sessionCookie, token),
+            .cookie(Protocol.sessionCookie, owner),
         )
-      yield assertEquals(
-        read[List[ManagedGroup]](listed).map(_.map(_.group.name)),
-        Right(List("Book club")),
-      )
-
-  test("following a group's invite link joins it"):
-    served(): call =>
-      for
-        owner    <- call(register("owner")).map(cookieOf(_).get)
-        guest    <- call(register("guest")).map(cookieOf(_).get)
-        group    <- bookClub(call, owner)
         code     <- inviteLink(call, owner, group)
         followed <- call(
           basicRequest
             .post(uri"http://test/api/invite-links/$code/follow")
             .cookie(Protocol.sessionCookie, guest),
         )
-      yield assertEquals(
-        read[LinkTarget](followed),
-        Right(LinkTarget.Joining(group)),
-      )
+      yield
+        assertEquals(
+          read[List[ManagedGroup]](listed).map(_.map(_.group.name)),
+          Right(List("Book club")),
+        )
+        assertEquals(
+          read[LinkTarget](followed),
+          Right(LinkTarget.Joining(group)),
+        )
 
   test("following a link as a guest signs them in, and claiming keeps them"):
     served(guests = true): call =>
@@ -273,14 +249,6 @@ class EndpointsSuite extends CatsEffectSuite:
           cookieOf(claimed).exists(_ != guest),
           "claiming set no fresh session cookie",
         )
-
-  test("following a link as a guest is not served where guests are not let in"):
-    served(): call =>
-      call(
-        basicRequest
-          .post(uri"http://test/api/invite-links/abcd1/welcome")
-          .body(Guest("Reader").asJson.noSpaces),
-      ).map(answer => assertEquals(answer.code, StatusCode.NotFound))
 
 object EndpointsSuite:
 
@@ -368,6 +336,10 @@ object EndpointsSuite:
     override val ownershipByLink: String = "Kein Eigentum per Link."
 
     override def principalMissing: String = "Niemand gefunden."
+
+  /** German where a request asks for it, and English otherwise. */
+  private val bilingual: Option[String] => Wording =
+    locale => if locale.contains("de") then German else Wording.english
 
   /** A request registering one account. */
   private def register(username: String) = basicRequest

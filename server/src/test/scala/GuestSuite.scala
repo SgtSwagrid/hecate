@@ -15,27 +15,22 @@ class GuestSuite extends CatsEffectSuite:
 
   import GuestSuite.*
 
-  test("a guest is made under the name they gave, and signed in"):
+  test("a guest is made under the name they gave, numbered where it is taken"):
     guests(): world =>
       for
         made  <- world.arrive("  Reader  ")
         found <- world.auth.current(Some(made._2.token))
-      yield
-        assertEquals(
-          (made._1.username, made._1.guest),
-          ("Reader", true),
-        )
-        assertEquals(found, Right(Some(made._1)))
-
-  test("a guest whose name somebody has is numbered, from two"):
-    guests(): world =>
-      for
         _     <- world.auth.register(Credentials("Sam", "hunter2222"))
         first <- world.arrive("Sam")
         next  <- world.arrive("Sam")
         other <- world.arrive("Samantha")
         lower <- world.arrive("sam")
       yield
+        assertEquals(
+          (made._1.username, made._1.guest),
+          ("Reader", true),
+        )
+        assertEquals(found, Right(Some(made._1)))
         assertEquals(first._1.username, "Sam 2")
         assertEquals(lower._1.username, "sam 4")
         assertEquals(next._1.username, "Sam 3")
@@ -149,22 +144,7 @@ class GuestSuite extends CatsEffectSuite:
         assertEquals(fresh, Right(Some(user)))
         assertEquals(signIn.map(_._1), Right(user))
 
-  test("a guest may keep the name they gave when they claim their account"):
-    guests(): world =>
-      for
-        made    <- world.arrive("Reader")
-        claimed <- world
-          .auth
-          .claim(
-            made._1,
-            Credentials("Reader", "hunter2222"),
-          )
-      yield assertEquals(
-        claimed.map(_._1),
-        Right(User(made._1.id, "Reader")),
-      )
-
-  test("only a guest's account is claimed, and never under a taken name"):
+  test("only a guest's account is claimed, under no name another has taken"):
     guests(): world =>
       for
         alice <- world.auth.register(Credentials("alice", "hunter2222"))
@@ -182,6 +162,13 @@ class GuestSuite extends CatsEffectSuite:
             Credentials("ALICE", "hunter2222"),
           )
         still <- world.auth.current(Some(made._2.token))
+        // The name they gave is theirs to keep.
+        kept <- world
+          .auth
+          .claim(
+            made._1,
+            Credentials("Reader", "hunter2222"),
+          )
       yield
         assertEquals(
           again.map(_._1),
@@ -192,6 +179,10 @@ class GuestSuite extends CatsEffectSuite:
           Left(AuthRefusal.UsernameTaken),
         )
         assertEquals(still, Right(Some(made._1)))
+        assertEquals(
+          kept.map(_._1),
+          Right(User(made._1.id, "Reader")),
+        )
 
   test("a guest deletes their account with no password, and nobody else can"):
     guests(): world =>

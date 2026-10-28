@@ -13,13 +13,11 @@ class RecoveryCodeSuite extends CatsEffectSuite:
         assertEquals(codes.distinct.size, codes.size)
         assert(codes.forall(_.matches("[a-z2-9]{5}-[a-z2-9]{5}")))
 
-  test("a code is recognised however it was copied out"):
+  test("a code is recognised however it was copied out, and no other is"):
     assertEquals(
       RecoveryCode.hash("abcde-fghjk"),
       RecoveryCode.hash(" ABCDE fghjk "),
     )
-
-  test("different codes hash differently"):
     assertNotEquals(
       RecoveryCode.hash("abcde-fghjk"),
       RecoveryCode.hash("abcde-fghjm"),

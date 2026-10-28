@@ -27,67 +27,34 @@ class AuthServiceSuite extends CatsEffectSuite:
           Right(Some(user.id)),
         )
 
-  test("nobody is signed in without a session"):
-    serving(): auth =>
-      for
-        current  <- auth.current(None)
-        signedIn <- auth.signedIn(None)
-      yield
-        assertEquals(current, Right(None))
-        assertEquals(signedIn, Left(AuthRefusal.SignedOut))
-
-  test("a taken username is refused"):
-    serving(): auth =>
-      for
-        _     <- auth.register(alice)
-        again <- auth.register(Credentials("alice", "different2"))
-      yield assertEquals(again, Left(AuthRefusal.UsernameTaken))
-
-  test("a username differing from a taken one only in case is refused"):
-    serving(): auth =>
-      for
-        _     <- auth.register(alice)
-        again <- auth.register(Credentials("ALICE", "different2"))
-      yield assertEquals(again, Left(AuthRefusal.UsernameTaken))
-
-  test("signing in ignores the username's letter case"):
+  test("a username is taken, and signed in to, in any letter case"):
     serving(): auth =>
       for
         made   <- auth.register(Credentials("Alice", "hunter2222"))
+        same   <- auth.register(Credentials("Alice", "different2"))
+        again  <- auth.register(Credentials("ALICE", "different2"))
         signed <- auth.signIn(Credentials("aLiCe", "hunter2222"))
-      yield assertEquals(signed.map(_._1), made.map(_._1))
+      yield
+        assertEquals(same, Left(AuthRefusal.UsernameTaken))
+        assertEquals(again, Left(AuthRefusal.UsernameTaken))
+        assertEquals(signed.map(_._1), made.map(_._1))
 
-  test("a password shorter than the policy allows is refused"):
-    serving(): auth =>
-      auth
-        .register(Credentials("alice", "short"))
-        .map(answer =>
-          assertEquals(
-            answer,
-            Left(AuthRefusal.PasswordTooShort(8)),
-          ),
-        )
-
-  test("a blank username is refused"):
-    serving(): auth =>
-      auth
-        .register(Credentials("   ", "hunter2222"))
-        .map(answer =>
-          assertEquals(
-            answer,
-            Left(AuthRefusal.UsernameEmpty),
-          ),
-        )
-
-  test("text longer than the protocol allows is refused, and never stored"):
+  test("what the policy or protocol forbids is refused, and never stored"):
     serving(): auth =>
       val name     = "a" * (Protocol.maxNameLength + 1)
       val password = "a" * (Protocol.maxPasswordLength + 1)
       for
+        short        <- auth.register(Credentials("alice", "short"))
+        blank        <- auth.register(Credentials("   ", "hunter2222"))
         longName     <- auth.register(Credentials(name, "hunter2222"))
         longPassword <- auth.signIn(Credentials("alice", password))
         found        <- auth.signIn(Credentials(name, "hunter2222"))
       yield
+        assertEquals(
+          short,
+          Left(AuthRefusal.PasswordTooShort(8)),
+        )
+        assertEquals(blank, Left(AuthRefusal.UsernameEmpty))
         assertEquals(
           longName,
           Left(AuthRefusal.TooLong(Protocol.maxNameLength)),
@@ -101,17 +68,19 @@ class AuthServiceSuite extends CatsEffectSuite:
           "an over-long username was registered",
         )
 
-  test("signing in needs the right password"):
+  test("signing in needs the right password, and an unknown name fails alike"):
     serving(): auth =>
       for
-        _     <- auth.register(alice)
-        wrong <- auth.signIn(Credentials("alice", "hunter3333"))
-        right <- auth.signIn(alice)
+        _       <- auth.register(alice)
+        wrong   <- auth.signIn(Credentials("alice", "hunter3333"))
+        unknown <- auth.signIn(Credentials("nobody", "hunter2222"))
+        right   <- auth.signIn(alice)
       yield
         assertEquals(
           wrong,
           Left(AuthRefusal.CredentialsIncorrect),
         )
+        assertEquals(unknown, wrong)
         assert(
           right.isRight,
           "a correct sign-in was refused",
@@ -140,24 +109,20 @@ class AuthServiceSuite extends CatsEffectSuite:
           assertEquals(kept, Some("1000"))
           assertEquals(raised, Some("2000"))
 
-  test("an unknown username is refused exactly as a wrong password is"):
-    serving(): auth =>
-      for
-        _       <- auth.register(alice)
-        unknown <- auth.signIn(Credentials("nobody", "hunter2222"))
-        wrong   <- auth.signIn(Credentials("alice", "hunter3333"))
-      yield assertEquals(unknown, wrong)
-
-  test("signing out closes the session it was given, and clears the cookie"):
+  test("signing out closes the session, and without one nobody is signed in"):
     serving(): auth =>
       for
         registered <- auth.register(alice)
         token = registered.toOption.get._2.token
-        closed <- auth.signOut(Some(token))
-        after  <- auth.current(Some(token))
+        closed   <- auth.signOut(Some(token))
+        after    <- auth.current(Some(token))
+        current  <- auth.current(None)
+        signedIn <- auth.signedIn(None)
       yield
         assertEquals(closed, Right(SessionCookie.closed))
         assertEquals(after, Right(None))
+        assertEquals(current, Right(None))
+        assertEquals(signedIn, Left(AuthRefusal.SignedOut))
 
   test("a new password closes every session and opens a fresh one"):
     serving(): auth =>
@@ -172,6 +137,8 @@ class AuthServiceSuite extends CatsEffectSuite:
         firstNow  <- auth.current(Some(first.token))
         secondNow <- auth.current(Some(second.toOption.get._2.token))
         fresh     <- auth.current(changed.map(_.token).toOption)
+        old       <- auth.signIn(alice)
+        replaced  <- auth.signIn(Credentials("alice", "hunter3333"))
       yield
         assertEquals(firstNow, Right(None))
         assertEquals(secondNow, Right(None))
@@ -179,15 +146,13 @@ class AuthServiceSuite extends CatsEffectSuite:
           fresh.map(_.map(_.id)),
           Right(Some(user.id)),
         )
+        assertEquals(
+          old,
+          Left(AuthRefusal.CredentialsIncorrect),
+        )
+        assertEquals(replaced.map(_._1), Right(user))
 
-  test("the rules say what the policy is, and whether accounts can be deleted"):
-    serving(): auth =>
-      IO(assertEquals(
-        auth.rules,
-        AuthRules(8, false, false, false),
-      ))
-
-  test("an account is not deleted without a store to delete it"):
+  test("the rules say what the policy is, and no store means no deletion"):
     serving(): auth =>
       for
         registered <- auth.register(alice)
@@ -195,10 +160,15 @@ class AuthServiceSuite extends CatsEffectSuite:
           registered.toOption.get._1,
           "hunter2222",
         )
-      yield assertEquals(
-        deleted,
-        Left(AuthRefusal.NoAccountDeletion),
-      )
+      yield
+        assertEquals(
+          auth.rules,
+          AuthRules(8, false, false, false),
+        )
+        assertEquals(
+          deleted,
+          Left(AuthRefusal.NoAccountDeletion),
+        )
 
   test("a failure that is not the user's is reported, and answered as such"):
     for

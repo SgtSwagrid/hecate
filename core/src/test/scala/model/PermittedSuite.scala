@@ -15,14 +15,12 @@ class PermittedSuite extends FunSuite:
     Access.Edit,
   )
 
-  test("a permitted value round-trips through JSON"):
-    assertEquals(
-      permitted.asJson.as[Permitted[Grant]],
-      Right(permitted),
-    )
-
-  test("the reader's access is sent beside the value by code"):
+  test("a permitted value is sent with the reader's access by code, and back"):
     assertEquals(
       permitted.asJson.hcursor.downField("access").as[String],
       Right("edit"),
+    )
+    assertEquals(
+      permitted.asJson.as[Permitted[Grant]],
+      Right(permitted),
     )

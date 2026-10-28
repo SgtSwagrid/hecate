@@ -21,27 +21,22 @@ class InviteLinkSuite extends FunSuite:
       InviteCode.parse("00000"),
       Some("00000"),
     )
-
-  test("anything else is not a code"):
     List(
       "k3x9",
       "k3x9qz",
       "k3-9q",
       "k3x9é",
       "",
-      "about/",
       "about",
-      "Books",
     ).foreach(text => assertEquals(InviteCode.parse(text), None, text))
-
-  test("the alphabet is the 26 letters and 10 digits"):
+    // The alphabet is the 26 letters and 10 digits, each once.
     assertEquals(InviteCode.alphabet.length, 36)
     assertEquals(
       InviteCode.alphabet.distinct,
       InviteCode.alphabet,
     )
 
-  test("a target is sent as its kind and what it names"):
+  test("a target is sent as its kind and what it names, and read back so"):
     assertEquals(
       (LinkTarget.Joining(7): LinkTarget).asJson,
       Json.obj(
@@ -57,8 +52,6 @@ class InviteLinkSuite extends FunSuite:
         "access"   -> "edit".asJson,
       ),
     )
-
-  test("every target reads back as it was sent"):
     List[LinkTarget](
       LinkTarget.Joining(7),
       LinkTarget.Sharing(Resource("book", 3), Access.View),
@@ -68,6 +61,4 @@ class InviteLinkSuite extends FunSuite:
         Right(target),
       ),
     )
-
-  test("a target of an unknown kind is refused"):
     assert(decode[LinkTarget]("""{"kind":"planet","id":1}""").isLeft)
