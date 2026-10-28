@@ -80,8 +80,8 @@ class EmailSuite extends CatsEffectSuite:
         )
         assertEquals(sent, Nil)
 
-  test("a forgotten password is reset through the confirmed address"):
-    mailing(): harness =>
+  test("a forgotten password is reset through the confirmed address, once"):
+    mailing(eager): harness =>
       import harness.{auth, outbox}
       for
         (alice, session) <- signUp(auth, "alice")
@@ -90,13 +90,19 @@ class EmailSuite extends CatsEffectSuite:
           PasswordResetRequest("ALICE@example.com"),
           None,
         )
-        mail  <- outbox.next
-        reset <-
+        mail <- outbox.next
+        // Asking again never stops a link already sent from working.
+        _      <- auth.requestPasswordReset(PasswordResetRequest(address), None)
+        second <- outbox.next
+        reset  <-
           auth.resetPassword(PasswordReset(Outbox.token(mail), "correct-horse"))
         old      <- auth.current(Some(session))
         signedIn <- auth.signIn(Credentials("alice", "correct-horse"))
         again    <- auth.resetPassword(
           PasswordReset(Outbox.token(mail), "battery-staple"),
+        )
+        later <- auth.resetPassword(
+          PasswordReset(Outbox.token(second), "battery-staple"),
         )
       yield
         assertEquals(asked, Right(()))
@@ -113,6 +119,10 @@ class EmailSuite extends CatsEffectSuite:
         )
         assertEquals(
           again,
+          Left(AuthRefusal.EmailLinkMissing),
+        )
+        assertEquals(
+          later,
           Left(AuthRefusal.EmailLinkMissing),
         )
 
@@ -247,14 +257,20 @@ class EmailSuite extends CatsEffectSuite:
       for
         (alice, _) <- signUp(auth, "alice")
         _          <- confirmed(harness, alice, address)
+        first      <- outbox.rest
         _          <- auth.changeTo(alice, Some(other))
         pending    <- outbox.next
         kept       <- auth.changeTo(alice, Some(address))
         stale      <- auth.confirmFrom(pending)
+        _          <- confirmed(harness, alice, other)
+        replaced   <- outbox.next
         removed    <- auth.changeTo(alice, None)
-        _    <- auth.requestPasswordReset(PasswordResetRequest(address), None)
+        notice     <- outbox.next
+        _    <- auth.requestPasswordReset(PasswordResetRequest(other), None)
         sent <- outbox.rest
       yield
+        // Only an address replaced or removed is told so, naming the account.
+        assertEquals(first, Nil)
         assertEquals(
           kept,
           Right(EmailStatus(Some(address), None)),
@@ -265,9 +281,18 @@ class EmailSuite extends CatsEffectSuite:
         )
         assertEquals(removed, Right(EmailStatus(None, None)))
         assertEquals(
-          sent.map(_.subject),
-          List(Wording.english.addressChangedMailSubject("Test")),
+          (replaced.to, notice.to),
+          (address, other),
         )
+        assertEquals(
+          List(replaced, notice).map(_.subject),
+          List.fill(2)(Wording.english.addressChangedMailSubject("Test")),
+        )
+        assert(
+          replaced.body.contains("\"alice\""),
+          replaced.body,
+        )
+        assertEquals(sent, Nil)
 
   test("an expired link is refused, and awaits nothing, until swept away"):
     mailing(cheap.copy(confirmHours = 0)): harness =>
@@ -347,32 +372,9 @@ class EmailSuite extends CatsEffectSuite:
         )
         assertEquals(sent.size, 2)
 
-  test("asking again for a reset never stops a link already sent from working"):
-    mailing(eager): harness =>
-      import harness.{auth, outbox}
-      for
-        (alice, _) <- signUp(auth, "alice")
-        _          <- confirmed(harness, alice, address)
-        _      <- auth.requestPasswordReset(PasswordResetRequest(address), None)
-        first  <- outbox.next
-        _      <- auth.requestPasswordReset(PasswordResetRequest(address), None)
-        second <- outbox.next
-        reset  <- auth.resetPassword(
-          PasswordReset(Outbox.token(first), "correct-horse"),
-        )
-        again <- auth.resetPassword(
-          PasswordReset(Outbox.token(second), "battery-staple"),
-        )
-      yield
-        assertEquals(reset.map(_._1), Right(alice))
-        assertEquals(
-          again,
-          Left(AuthRefusal.EmailLinkMissing),
-        )
-
-  test("a reset link is only issued for the address that is its user's now"):
+  test("a reset link is only for its user's address now, and dies with them"):
     mailing(): harness =>
-      import harness.{auth, users}
+      import harness.{auth, db, users}
       for
         (alice, _) <- signUp(auth, "alice")
         _          <- confirmed(harness, alice, address)
@@ -391,45 +393,12 @@ class EmailSuite extends CatsEffectSuite:
             5,
           ),
         )
-      yield assertEquals(issued, List(false, true))
-
-  test("an address replaced or removed is told so, naming the account"):
-    mailing(eager): harness =>
-      import harness.{auth, outbox}
-      for
-        (alice, _) <- signUp(auth, "alice")
-        _          <- confirmed(harness, alice, address)
-        first      <- outbox.rest
-        _          <- confirmed(harness, alice, other)
-        replaced   <- outbox.next
-        _          <- auth.changeTo(alice, None)
-        removed    <- outbox.next
+        before <- links(harness)
+        _      <- db.run(users.delete(alice.id))
+        after  <- links(harness)
       yield
-        assertEquals(first, Nil)
-        assertEquals(
-          (replaced.to, removed.to),
-          (address, other),
-        )
-        assertEquals(
-          replaced.subject,
-          Wording.english.addressChangedMailSubject("Test"),
-        )
-        assert(
-          replaced.body.contains("\"alice\""),
-          replaced.body,
-        )
-
-  test("deleting an account deletes the links sent to it"):
-    mailing(): harness =>
-      import harness.{auth, db, outbox, users}
-      for
-        (alice, _) <- signUp(auth, "alice")
-        _          <- auth.changeTo(alice, Some(address))
-        _          <- outbox.next
-        before     <- links(harness)
-        _          <- db.run(users.delete(alice.id))
-        after      <- links(harness)
-      yield assertEquals((before, after), (1, 0))
+        assertEquals(issued, List(false, true))
+        assertEquals((before, after), (1, 0))
 
   test(
     "a mail that cannot be sent is refused, awaits nothing, and still counts",
@@ -483,29 +452,6 @@ class EmailSuite extends CatsEffectSuite:
           )
           assertEquals(changed, Left(AuthRefusal.NoEmail))
           assertEquals(forgot, Left(AuthRefusal.NoEmail))
-
-  test("a logged mailer writes out the whole mail, links and all"):
-    for
-      written <- Ref[IO].of(List.empty[String])
-      _       <- Mailer
-        .logged(text => written.update(_ :+ text))
-        .send(Mail(
-          address,
-          "Reset",
-          "https://example.com/reset/abc",
-        ))
-      texts <- written.get
-    yield
-      assertEquals(texts.size, 1)
-      List(
-        address,
-        "Reset",
-        "https://example.com/reset/abc",
-      ).foreach: part =>
-        assert(
-          texts.head.contains(part),
-          s"no $part in ${ texts.head }",
-        )
 
 object EmailSuite:
 

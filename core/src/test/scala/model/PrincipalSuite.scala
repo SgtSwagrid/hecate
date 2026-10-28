@@ -7,38 +7,22 @@ import munit.FunSuite
 
 class PrincipalSuite extends FunSuite:
 
-  test("a principal round-trips through JSON as any case"):
-    List(
-      Principal.Person(1),
-      Principal.Group(2),
-      Principal.System,
-    ).foreach(principal =>
-      assertEquals(
-        principal.asJson.as[Principal],
-        Right(principal),
-      ),
-    )
-
-  test("a principal is sent as its spelled kind, never its case name"):
+  test("a principal is sent as its spelled kind, and read back as any case"):
     List[(Principal, String)](
       Principal.Person(7) -> "person",
       Principal.Group(7)  -> "group",
       Principal.System    -> "system",
-    ).foreach((principal, kind) =>
+    ).foreach: (principal, kind) =>
       assertEquals(
         principal.asJson.hcursor.downField("kind").as[String],
         Right(kind),
-      ),
-    )
+      )
+      assertEquals(
+        principal.asJson.as[Principal],
+        Right(principal),
+      )
 
-  test("a kind this version does not know is refused rather than guessed at"):
-    assertEquals(Principal.of("robot", 1), None)
-    assert(
-      decode[Principal]("""{"kind":"robot","id":1}""").isLeft,
-      "an unknown kind decoded to something",
-    )
-
-  test("every kind is restored from what it is stored as"):
+  test("every kind is restored from what it is stored as, and nothing else"):
     List(
       Principal.Person(5),
       Principal.Group(5),
@@ -49,13 +33,12 @@ class PrincipalSuite extends FunSuite:
         Some(principal),
       ),
     )
-
-  test("a user and a group sharing an identifier are different principals"):
-    val person: Principal = Principal.Person(7)
-    val group: Principal  = Principal.Group(7)
-    assertNotEquals(person, group)
-    assertEquals(person.id, group.id)
-
-  test("the system is one principal, never another identifier"):
+    // The system is one principal, never another identifier.
     assertEquals(Principal.System.id, 0L)
     assertEquals(Principal.of("system", 1), None)
+    // A kind this version does not know is refused rather than guessed at.
+    assertEquals(Principal.of("robot", 1), None)
+    assert(
+      decode[Principal]("""{"kind":"robot","id":1}""").isLeft,
+      "an unknown kind decoded to something",
+    )

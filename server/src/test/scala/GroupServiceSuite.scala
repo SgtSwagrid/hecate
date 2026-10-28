@@ -17,33 +17,24 @@ class GroupServiceSuite extends CatsEffectSuite:
     .groups("group-service")
     .use((groups, users) => check(GroupService(groups), groups, users))
 
-  test("a group's name longer than the protocol allows is refused, unstored"):
+  test("text too long, or a store's refusal, is answered as a value, unstored"):
     serving: (service, groups, users) =>
       for
-        owner   <- register(users, "owner")
-        created <- service.create(owner, GroupDetails(overlong))
-        stored  <- groups.managed(owner.id)
+        owner    <- register(users, "owner")
+        created  <- service.create(owner, GroupDetails(overlong))
+        stored   <- groups.managed(owner.id)
+        team     <- groups.create(owner.id, GroupDetails("Team"))
+        invited  <- service.invite(owner, team.id, Invitee(overlong))
+        stranger <- register(users, "stranger")
+        deleted  <- service.delete(stranger, team.id)
       yield
         assertEquals(
           created.map(_.id),
           Left(AuthRefusal.TooLong(Protocol.maxNameLength)),
         )
         assertEquals(stored, Nil)
-
-  test("an invitation naming nobody the protocol allows is refused"):
-    serving: (service, groups, users) =>
-      for
-        owner   <- register(users, "owner")
-        team    <- groups.create(owner.id, GroupDetails("Team"))
-        invited <- service.invite(owner, team.id, Invitee(overlong))
-      yield assertEquals(
-        invited.map(_.id),
-        Left(AuthRefusal.TooLong(Protocol.maxNameLength)),
-      )
-
-  test("a store's refusal is answered as a value, not a failure"):
-    serving: (service, _, users) =>
-      for
-        stranger <- register(users, "stranger")
-        deleted  <- service.delete(stranger, 404)
-      yield assertEquals(deleted, Left(AuthRefusal.GroupMissing))
+        assertEquals(
+          invited.map(_.id),
+          Left(AuthRefusal.TooLong(Protocol.maxNameLength)),
+        )
+        assertEquals(deleted, Left(AuthRefusal.GroupMissing))

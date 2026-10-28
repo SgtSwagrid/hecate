@@ -38,7 +38,7 @@ class AffectedSuite extends CatsEffectSuite:
         )),
       )
 
-  test("joining a group concerns its owner and the joiner, and its enclosure"):
+  test("following a link concerns a group's owner, joiner and enclosure"):
     served: world =>
       for
         owner   <- world.signUp("owner")
@@ -56,13 +56,28 @@ class AffectedSuite extends CatsEffectSuite:
         _    <- world.reported
         _    <- world.linking.follow(joiner, code)
         told <- world.reported
-      yield assertEquals(
-        told,
-        List(Affected.Groups(
-          Audience.People(Set(owner.id, joiner.id)),
-          Set(team.id, company.id),
-        )),
-      )
+        // Following a link to a resource changes its grants.
+        shared <- world
+          .db
+          .run(
+            world
+              .links
+              .ensure(
+                owner.id,
+                LinkTarget.Sharing(book, Access.View),
+              ),
+          )
+        _       <- world.linking.follow(joiner, shared)
+        granted <- world.reported
+      yield
+        assertEquals(
+          told,
+          List(Affected.Groups(
+            Audience.People(Set(owner.id, joiner.id)),
+            Set(team.id, company.id),
+          )),
+        )
+        assertEquals(granted, List(Affected.Grants(book)))
 
   test(
     "inviting someone reports the invitation beside the change to the group",
@@ -82,27 +97,7 @@ class AffectedSuite extends CatsEffectSuite:
           )
         told <- world.reported
         sent <- world.groups.invitations(invitee.id)
-      yield
-        assert(told.headOption.exists(_.isInstanceOf[Affected.Groups]))
-        assertEquals(
-          invitations(told),
-          List(Affected.Invited(sent.head.id, team.id, invitee.id)),
-        )
-
-  test("inviting someone already invited, or oneself, reports no invitation"):
-    served: world =>
-      for
-        owner   <- world.signUp("owner")
-        invitee <- world.signUp("invitee")
-        team    <- world.groups.create(owner.id, GroupDetails("Team"))
-        _       <- world
-          .service
-          .invite(
-            owner,
-            team.id,
-            Invitee(invitee.username),
-          )
-        _ <- world.reported
+        // Inviting someone already invited, or oneself, reports no invitation.
         _ <- world
           .service
           .invite(
@@ -110,9 +105,15 @@ class AffectedSuite extends CatsEffectSuite:
             team.id,
             Invitee(invitee.username),
           )
-        _    <- world.service.invite(owner, team.id, Invitee(owner.username))
-        told <- world.reported
-      yield assertEquals(invitations(told), List.empty)
+        _     <- world.service.invite(owner, team.id, Invitee(owner.username))
+        again <- world.reported
+      yield
+        assert(told.headOption.exists(_.isInstanceOf[Affected.Groups]))
+        assertEquals(
+          invitations(told),
+          List(Affected.Invited(sent.head.id, team.id, invitee.id)),
+        )
+        assertEquals(invitations(again), List.empty)
 
   test("renaming a group concerns whoever sees it, and not whoever is in it"):
     served: world =>
@@ -190,53 +191,29 @@ class AffectedSuite extends CatsEffectSuite:
         )),
       )
 
-  test("following a link to a resource changes its grants"):
+  test("a new password concerns the account, and a refused change nobody"):
     served: world =>
       for
-        owner  <- world.signUp("owner")
-        reader <- world.signUp("reader")
-        code   <- world
-          .db
-          .run(
-            world
-              .links
-              .ensure(
-                owner.id,
-                LinkTarget.Sharing(book, Access.View),
-              ),
-          )
-        _    <- world.linking.follow(reader, code)
-        told <- world.reported
-      yield assertEquals(told, List(Affected.Grants(book)))
-
-  test("a new password concerns the account's own sessions"):
-    served: world =>
-      for
-        user <- world.signUp("user")
-        _    <- world
+        user     <- world.signUp("user")
+        stranger <- world.signUp("stranger")
+        club     <- world.groups.create(user.id, GroupDetails("Club"))
+        _        <- world.reported
+        _        <- world
           .auth
           .changePassword(
             user,
             PasswordChange("hunter2222", "hunter3333"),
           )
-        told <- world.reported
-      yield assertEquals(told, List(Affected.Account(user.id)))
-
-  test("a refused change concerns nobody"):
-    served: world =>
-      for
-        owner    <- world.signUp("owner")
-        stranger <- world.signUp("stranger")
-        club     <- world.groups.create(owner.id, GroupDetails("Club"))
-        _        <- world.reported
-        refused <- world.service.update(stranger, club.id, GroupDetails("Mine"))
         told    <- world.reported
+        refused <- world.service.update(stranger, club.id, GroupDetails("Mine"))
+        none    <- world.reported
       yield
+        assertEquals(told, List(Affected.Account(user.id)))
         assert(
           refused.isLeft,
           "a stranger renamed someone else's group",
         )
-        assertEquals(told, List.empty)
+        assertEquals(none, List.empty)
 
 object AffectedSuite:
 

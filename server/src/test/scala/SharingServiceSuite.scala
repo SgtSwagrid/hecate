@@ -22,16 +22,19 @@ class SharingServiceSuite extends CatsEffectSuite:
   test("an owner shares with someone they may address, and withdraws it"):
     served(): world =>
       for
-        owner  <- world.owner
-        reader <- world.signUp("reader")
-        club   <- world.groups.create(owner.id, GroupDetails("Book club"))
-        _      <- enrol(world.groups, owner, club.id, reader)
-        _      <- world.service.grant(owner, book, reader.person, Access.Edit)
-        shared <- world.service.list(owner, book)
-        _      <- world.reported
-        _      <- world.service.revoke(owner, book, reader.person)
-        after  <- world.service.list(owner, book)
-        told   <- world.reported
+        owner   <- world.owner
+        reader  <- world.signUp("reader")
+        club    <- world.groups.create(owner.id, GroupDetails("Book club"))
+        _       <- enrol(world.groups, owner, club.id, reader)
+        _       <- world.service.grant(owner, book, reader.person, Access.View)
+        _       <- world.service.grant(owner, book, reader.person, Access.Edit)
+        raised  <- world.reported
+        shared  <- world.service.list(owner, book)
+        _       <- world.service.grant(owner, book, reader.person, Access.View)
+        lowered <- world.reported
+        _       <- world.service.revoke(owner, book, reader.person)
+        after   <- world.service.list(owner, book)
+        told    <- world.reported
       yield
         assertEquals(
           shared.map(_.map(grant => grant.principal -> grant.access).toSet),
@@ -44,24 +47,7 @@ class SharingServiceSuite extends CatsEffectSuite:
           after.map(_.map(_.principal)),
           Right(List(owner.person)),
         )
-        assertEquals(
-          told,
-          List(Affected.Grants(book, Set(owner.id, reader.id))),
-        )
-
-  test("whom the grants reached before is told only of a change taking access"):
-    served(): world =>
-      for
-        owner   <- world.owner
-        reader  <- world.signUp("reader")
-        club    <- world.groups.create(owner.id, GroupDetails("Book club"))
-        _       <- enrol(world.groups, owner, club.id, reader)
-        _       <- world.service.grant(owner, book, reader.person, Access.View)
-        _       <- world.service.grant(owner, book, reader.person, Access.Edit)
-        raised  <- world.reported
-        _       <- world.service.grant(owner, book, reader.person, Access.View)
-        lowered <- world.reported
-      yield
+        // Those reached before are told only of a change taking access.
         assertEquals(
           raised,
           List(
@@ -71,6 +57,10 @@ class SharingServiceSuite extends CatsEffectSuite:
         )
         assertEquals(
           lowered,
+          List(Affected.Grants(book, Set(owner.id, reader.id))),
+        )
+        assertEquals(
+          told,
           List(Affected.Grants(book, Set(owner.id, reader.id))),
         )
 
@@ -173,14 +163,17 @@ class SharingServiceSuite extends CatsEffectSuite:
   test("a link grants the access asked for, keeps its code, and never owns"):
     served(): world =>
       for
-        owner   <- world.owner
-        first   <- world.service.setLink(owner, book, Access.View)
-        edited  <- world.service.setLink(owner, book, Access.Edit)
-        owning  <- world.service.setLink(owner, book, Access.Own)
-        renewed <- world.service.relink(owner, book)
-        shown   <- world.service.link(owner, book)
-        _       <- world.service.unlink(owner, book)
-        gone    <- world.service.link(owner, book)
+        owner <- world.owner
+        _     <- grant(world.grants, world.db)(lost, owner.person, Access.Own)
+        made  <- world.service.setLink(owner, lost, Access.View)
+        shownLost <- world.service.link(owner, lost)
+        first     <- world.service.setLink(owner, book, Access.View)
+        edited    <- world.service.setLink(owner, book, Access.Edit)
+        owning    <- world.service.setLink(owner, book, Access.Own)
+        renewed   <- world.service.relink(owner, book)
+        shown     <- world.service.link(owner, book)
+        _         <- world.service.unlink(owner, book)
+        gone      <- world.service.link(owner, book)
       yield
         assertEquals(
           first.map(_.access),
@@ -202,20 +195,12 @@ class SharingServiceSuite extends CatsEffectSuite:
         assertNotEquals(renewed.map(_.code), first.map(_.code))
         assertEquals(shown, renewed.map(Some(_)))
         assertEquals(gone, Right(None))
-
-  test("nothing links to a resource that no longer exists"):
-    served(): world =>
-      for
-        owner <- world.owner
-        _     <- grant(world.grants, world.db)(lost, owner.person, Access.Own)
-        made  <- world.service.setLink(owner, lost, Access.View)
-        shown <- world.service.link(owner, lost)
-      yield
+        // Nothing links to a resource that no longer exists.
         assertEquals(
           made,
           Left(AuthRefusal.ResourceMissing("book")),
         )
-        assertEquals(shown, Right(None))
+        assertEquals(shownLost, Right(None))
 
   test("what a deleted group alone owned passes to whoever deleted it"):
     served(): world =>
@@ -279,26 +264,18 @@ class SharingServiceSuite extends CatsEffectSuite:
         _       <- world.service.grant(owner, book, club.principal, Access.Own)
         _       <- world.service.grant(owner, book, partner.person, Access.Own)
         _       <- world.service.revoke(owner, book, owner.person)
-        handed  <- world.groups.delete(owner.id, club.id)
-        held    <- world.service.list(partner, book)
+        // A resource that no longer exists passes to nobody either.
+        _ <- grant(world.grants, world.db)(lost, club.principal, Access.Own)
+        handed <- world.groups.delete(owner.id, club.id)
+        held   <- world.service.list(partner, book)
+        gone   <- world.grants.over(lost)
       yield
         assertEquals(handed, List.empty)
         assertEquals(
           held.map(_.map(_.principal)),
           Right(List(partner.person)),
         )
-
-  test("a deleted group's resource that no longer exists passes to nobody"):
-    served(): world =>
-      for
-        owner <- world.owner
-        club  <- world.groups.create(owner.id, GroupDetails("Book club"))
-        _     <- grant(world.grants, world.db)(lost, club.principal, Access.Own)
-        handed <- world.groups.delete(owner.id, club.id)
-        held   <- world.grants.over(lost)
-      yield
-        assertEquals(handed, List.empty)
-        assertEquals(held, List.empty)
+        assertEquals(gone, List.empty)
 
 object SharingServiceSuite:
 
