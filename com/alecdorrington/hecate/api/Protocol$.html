@@ -1,0 +1,263 @@
+<!DOCTYPE html><html data-pathToRoot="../../../../" data-rawLocation="com/alecdorrington/hecate/api/Protocol$" data-dynamicSideMenu="false"><head><meta charset="utf-8"></meta><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"></meta><title>Protocol</title><link rel="shortcut icon" type="image/x-icon" href="../../../../favicon.ico"></link><script type="text/javascript" src="../../../../scripts/theme.js"></script><script type="text/javascript" src="../../../../scripts/searchData.js" defer="true"></script><script type="text/javascript" src="../../../../scripts/scastieConfiguration.js" defer="true"></script><link rel="stylesheet" href="../../../../styles/theme/bundle.css"></link><link rel="stylesheet" href="../../../../styles/theme/components/bundle.css"></link><link rel="stylesheet" href="../../../../styles/theme/components/button/bundle.css"></link><link rel="stylesheet" href="../../../../styles/theme/layout/bundle.css"></link><link rel="stylesheet" href="../../../../styles/dotty-icons.css"></link><link rel="stylesheet" href="../../../../styles/filter-bar.css"></link><link rel="stylesheet" href="../../../../styles/searchbar.css"></link><link rel="stylesheet" href="../../../../styles/social-links.css"></link><link rel="stylesheet" href="../../../../styles/versions-dropdown.css"></link><link rel="stylesheet" href="../../../../styles/content-contributors.css"></link><script type="text/javascript" src="../../../../hljs/highlight.pack.js" defer="true"></script><script type="text/javascript" src="../../../../scripts/hljs-scala3.js" defer="true"></script><script type="text/javascript" src="../../../../scripts/ux.js" defer="true"></script><script type="text/javascript" src="../../../../scripts/common/component.js" defer="true"></script><script type="text/javascript" src="../../../../scripts/common/utils.js" defer="true"></script><script type="text/javascript" src="../../../../scripts/components/FilterBar.js" defer="true"></script><script type="text/javascript" src="../../../../scripts/components/DocumentableList.js" defer="true"></script><script type="text/javascript" src="../../../../scripts/components/Input.js" defer="true"></script><script type="text/javascript" src="../../../../scripts/components/FilterGroup.js" defer="true"></script><script type="text/javascript" src="../../../../scripts/components/Filter.js" defer="true"></script><script type="text/javascript" src="../../../../scripts/scaladoc-scalajs.js" defer="true"></script><script type="text/javascript" src="../../../../scripts/contributors.js" defer="true"></script><script type="text/javascript" src="https://d3js.org/d3.v6.min.js" defer="true"></script><script type="text/javascript" src="https://cdn.jsdelivr.net/npm/graphlib-dot@0.6.2/dist/graphlib-dot.min.js" defer="true"></script><script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/dagre-d3/0.6.1/dagre-d3.min.js" defer="true"></script><script type="text/javascript" src="https://scastie.scala-lang.org/embedded.js" defer="true"></script><script type="text/javascript" src="../../../../scripts/data.js" defer="true"></script><script>var pathToRoot = "../../../../";</script></head><body><div id=""><div id="header" class="body-small"><div class="header-container-left"><a href="../../../../" class="logo-container"><span class="project-name h300">Hecate</span></a><span onclick="dropdownHandler(event)" class="text-button with-arrow" id="dropdown-trigger"><a></a></span><div id="version-dropdown" class="dropdown-menu"></div></div><div class="header-container-right"><button id="search-toggle" class="icon-button"></button><span id="theme-toggle" class="icon-button"></span><span id="mobile-menu-toggle" class="icon-button hamburger"></span></div></div><div id="mobile-menu"><div class="mobile-menu-header body-small"><span class="mobile-menu-logo"><span class="project-name h300">Hecate</span></span><button id="mobile-menu-close" class="icon-button close"></button></div><div class="mobile-menu-container body-medium"><input id="mobile-scaladoc-searchbar-input" class="scaladoc-searchbar-input" type="search" placeholder="Find anything"></input><span id="mobile-theme-toggle" class="mobile-menu-item mode"></span></div></div><span id="mobile-sidebar-toggle" class="floating-button"></span><div id="leftColumn" class="body-small"><div class="switcher-container"><a id="api-nav-button" class="switcher h100 selected" href="../../../../index.html">API</a></div><nav id="api-nav" class="side-menu"><div class="ni n0 expanded"><span class="nh h100 expanded cs"><button class="ar icon-button expanded"></button><a href="../../hecate.html"><span class="micon pa"></span><span>com.alecdorrington.hecate</span></a></span><div class="ni n1 expanded"><span class="nh h100 expanded cs"><button class="ar icon-button expanded"></button><a href="../api.html"><span class="micon pa"></span><span>api</span></a></span><div class="ni n2 expanded"><span class="nh h100 selected"><a href="#"><span class="micon ob"></span><span>Protocol</span></a></span></div></div><div class="ni n1"><span class="nh "><button class="ar icon-button "></button><a href="../i18n.html"><span class="micon pa"></span><span>i18n</span></a></span><div class="ni n2 "><span class="nh "><a href="../i18n/Wording.html"><span class="micon tr"></span><span>Wording</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../i18n/Wording$.html"><span class="micon ob"></span><span>Wording</span></a></span></div></div><div class="ni n1"><span class="nh "><button class="ar icon-button "></button><a href="../model.html"><span class="micon pa"></span><span>model</span></a></span><div class="ni n2 "><span class="nh "><a href="../model/Access$.html"><span class="micon ob"></span><span>Access</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/Access.html"><span class="micon en"></span><span>Access</span></a></span></div><div class="ni n2"><span class="nh "><button class="ar icon-button "></button><a href="../model/AuthRefusal.html"><span class="micon en"></span><span>AuthRefusal</span></a></span><div class="ni n3 "><span class="nh "><a href="../model/AuthRefusal$$PasswordTooShort.html"><span class="micon cl"></span><span>PasswordTooShort</span></a></span></div><div class="ni n3 "><span class="nh "><a href="../model/AuthRefusal$$TooLong.html"><span class="micon cl"></span><span>TooLong</span></a></span></div><div class="ni n3 "><span class="nh "><a href="../model/AuthRefusal$$UserMissing.html"><span class="micon cl"></span><span>UserMissing</span></a></span></div><div class="ni n3 "><span class="nh "><a href="../model/AuthRefusal$$SoleOwner.html"><span class="micon cl"></span><span>SoleOwner</span></a></span></div><div class="ni n3 "><span class="nh "><a href="../model/AuthRefusal$$ResourceMissing.html"><span class="micon cl"></span><span>ResourceMissing</span></a></span></div><div class="ni n3 "><span class="nh "><a href="../model/AuthRefusal$$NotOwner.html"><span class="micon cl"></span><span>NotOwner</span></a></span></div><div class="ni n3 "><span class="nh "><a href="../model/AuthRefusal$$LastOwner.html"><span class="micon cl"></span><span>LastOwner</span></a></span></div></div><div class="ni n2 "><span class="nh "><a href="../model/AuthRules.html"><span class="micon cl"></span><span>AuthRules</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/Caller.html"><span class="micon cl"></span><span>Caller</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/Credentials.html"><span class="micon cl"></span><span>Credentials</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/EmailChange.html"><span class="micon cl"></span><span>EmailChange</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/EmailConfirmation.html"><span class="micon cl"></span><span>EmailConfirmation</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/EmailStatus.html"><span class="micon cl"></span><span>EmailStatus</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/Gated$.html"><span class="micon ob"></span><span>Gated</span></a></span></div><div class="ni n2"><span class="nh "><button class="ar icon-button "></button><a href="../model/Gated.html"><span class="micon en"></span><span>Gated</span></a></span><div class="ni n3 "><span class="nh "><a href="../model/Gated$$Shown.html"><span class="micon cl"></span><span>Shown</span></a></span></div></div><div class="ni n2 "><span class="nh "><a href="../model/Grant.html"><span class="micon cl"></span><span>Grant</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/Group.html"><span class="micon cl"></span><span>Group</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/GroupDetails.html"><span class="micon cl"></span><span>GroupDetails</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/Guest.html"><span class="micon cl"></span><span>Guest</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/Holder.html"><span class="micon cl"></span><span>Holder</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/Invitation.html"><span class="micon cl"></span><span>Invitation</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/InviteCode$.html"><span class="micon ob"></span><span>InviteCode</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/InviteLink.html"><span class="micon cl"></span><span>InviteLink</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/Invitee.html"><span class="micon cl"></span><span>Invitee</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/JoinableGroup.html"><span class="micon cl"></span><span>JoinableGroup</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/LinkPreview.html"><span class="micon cl"></span><span>LinkPreview</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/LinkTarget$.html"><span class="micon ob"></span><span>LinkTarget</span></a></span></div><div class="ni n2"><span class="nh "><button class="ar icon-button "></button><a href="../model/LinkTarget.html"><span class="micon en"></span><span>LinkTarget</span></a></span><div class="ni n3 "><span class="nh "><a href="../model/LinkTarget$$Joining.html"><span class="micon cl"></span><span>Joining</span></a></span></div><div class="ni n3 "><span class="nh "><a href="../model/LinkTarget$$Sharing.html"><span class="micon cl"></span><span>Sharing</span></a></span></div></div><div class="ni n2 "><span class="nh "><a href="../model/ManagedGroup.html"><span class="micon cl"></span><span>ManagedGroup</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/Membership.html"><span class="micon cl"></span><span>Membership</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/PasswordChange.html"><span class="micon cl"></span><span>PasswordChange</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/PasswordCheck.html"><span class="micon cl"></span><span>PasswordCheck</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/PasswordReset.html"><span class="micon cl"></span><span>PasswordReset</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/PasswordResetRequest.html"><span class="micon cl"></span><span>PasswordResetRequest</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/Permitted.html"><span class="micon cl"></span><span>Permitted</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/Principal$.html"><span class="micon ob"></span><span>Principal</span></a></span></div><div class="ni n2"><span class="nh "><button class="ar icon-button "></button><a href="../model/Principal.html"><span class="micon en"></span><span>Principal</span></a></span><div class="ni n3 "><span class="nh "><a href="../model/Principal$$Person.html"><span class="micon cl"></span><span>Person</span></a></span></div><div class="ni n3 "><span class="nh "><a href="../model/Principal$$Group.html"><span class="micon cl"></span><span>Group</span></a></span></div></div><div class="ni n2 "><span class="nh "><a href="../model/Recovery.html"><span class="micon cl"></span><span>Recovery</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/RecoveryCodes.html"><span class="micon cl"></span><span>RecoveryCodes</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/Resource.html"><span class="micon cl"></span><span>Resource</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/Resource$.html"><span class="micon ob"></span><span>Resource</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/User.html"><span class="micon cl"></span><span>User</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../model/Welcome.html"><span class="micon cl"></span><span>Welcome</span></a></span></div></div><div class="ni n1"><span class="nh "><button class="ar icon-button "></button><a href="../server.html"><span class="micon pa"></span><span>server</span></a></span><div class="ni n2"><span class="nh "><button class="ar icon-button "></button><a href="../server/tapir.html"><span class="micon pa"></span><span>tapir</span></a></span><div class="ni n3 "><span class="nh "><a href="../server/tapir/AuthEndpoints.html"><span class="micon cl"></span><span>AuthEndpoints</span></a></span></div><div class="ni n3 "><span class="nh "><a href="../server/tapir/AuthEndpoints$.html"><span class="micon ob"></span><span>AuthEndpoints</span></a></span></div><div class="ni n3 "><span class="nh "><a href="../server/tapir/GroupEndpoints.html"><span class="micon cl"></span><span>GroupEndpoints</span></a></span></div><div class="ni n3 "><span class="nh "><a href="../server/tapir/LinkEndpoints.html"><span class="micon cl"></span><span>LinkEndpoints</span></a></span></div><div class="ni n3 "><span class="nh "><a href="../server/tapir/SharingEndpoints.html"><span class="micon cl"></span><span>SharingEndpoints</span></a></span></div></div><div class="ni n2 "><span class="nh "><a href="../server/AccountStore.html"><span class="micon cl"></span><span>AccountStore</span></a></span></div><div class="ni n2"><span class="nh "><button class="ar icon-button "></button><a href="../server/Affected.html"><span class="micon en"></span><span>Affected</span></a></span><div class="ni n3 "><span class="nh "><a href="../server/Affected$$Groups.html"><span class="micon cl"></span><span>Groups</span></a></span></div><div class="ni n3 "><span class="nh "><a href="../server/Affected$$Invited.html"><span class="micon cl"></span><span>Invited</span></a></span></div><div class="ni n3 "><span class="nh "><a href="../server/Affected$$Grants.html"><span class="micon cl"></span><span>Grants</span></a></span></div><div class="ni n3 "><span class="nh "><a href="../server/Affected$$Account.html"><span class="micon cl"></span><span>Account</span></a></span></div></div><div class="ni n2"><span class="nh "><button class="ar icon-button "></button><a href="../server/Audience.html"><span class="micon en"></span><span>Audience</span></a></span><div class="ni n3 "><span class="nh "><a href="../server/Audience$$People.html"><span class="micon cl"></span><span>People</span></a></span></div></div><div class="ni n2 "><span class="nh "><a href="../server/AuthPolicy.html"><span class="micon cl"></span><span>AuthPolicy</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/AuthPolicy$.html"><span class="micon ob"></span><span>AuthPolicy</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/AuthProblem.html"><span class="micon cl"></span><span>AuthProblem</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/AuthService$.html"><span class="micon ob"></span><span>AuthService</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/AuthService.html"><span class="micon cl"></span><span>AuthService</span></a></span></div><div class="ni n2"><span class="nh "><button class="ar icon-button "></button><a href="../server/AuthTables.html"><span class="micon cl"></span><span>AuthTables</span></a></span><div class="ni n3 "><span class="nh "><a href="../server/AuthTables$EmailLinks.html"><span class="micon cl"></span><span>EmailLinks</span></a></span></div><div class="ni n3 "><span class="nh "><a href="../server/AuthTables$Grants.html"><span class="micon cl"></span><span>Grants</span></a></span></div><div class="ni n3 "><span class="nh "><a href="../server/AuthTables$Groups.html"><span class="micon cl"></span><span>Groups</span></a></span></div><div class="ni n3 "><span class="nh "><a href="../server/AuthTables$Invitations.html"><span class="micon cl"></span><span>Invitations</span></a></span></div><div class="ni n3 "><span class="nh "><a href="../server/AuthTables$InviteLinks.html"><span class="micon cl"></span><span>InviteLinks</span></a></span></div><div class="ni n3 "><span class="nh "><a href="../server/AuthTables$Members.html"><span class="micon cl"></span><span>Members</span></a></span></div><div class="ni n3 "><span class="nh "><a href="../server/AuthTables$RecoveryCodes.html"><span class="micon cl"></span><span>RecoveryCodes</span></a></span></div><div class="ni n3 "><span class="nh "><a href="../server/AuthTables$Requests.html"><span class="micon cl"></span><span>Requests</span></a></span></div><div class="ni n3 "><span class="nh "><a href="../server/AuthTables$SentMails.html"><span class="micon cl"></span><span>SentMails</span></a></span></div><div class="ni n3 "><span class="nh "><a href="../server/AuthTables$Sessions.html"><span class="micon cl"></span><span>Sessions</span></a></span></div><div class="ni n3 "><span class="nh "><a href="../server/AuthTables$Users.html"><span class="micon cl"></span><span>Users</span></a></span></div></div><div class="ni n2 "><span class="nh "><a href="../server/EmailAddress$.html"><span class="micon ob"></span><span>EmailAddress</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/EmailLinkRow.html"><span class="micon cl"></span><span>EmailLinkRow</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/EmailPurpose.html"><span class="micon en"></span><span>EmailPurpose</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/GrantRow.html"><span class="micon cl"></span><span>GrantRow</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/GrantRow$.html"><span class="micon ob"></span><span>GrantRow</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/GrantStore$.html"><span class="micon ob"></span><span>GrantStore</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/GrantStore.html"><span class="micon cl"></span><span>GrantStore</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/GroupRow.html"><span class="micon cl"></span><span>GroupRow</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/GroupService.html"><span class="micon cl"></span><span>GroupService</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/GroupStore$.html"><span class="micon ob"></span><span>GroupStore</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/GroupStore.html"><span class="micon cl"></span><span>GroupStore</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/InvitationRow.html"><span class="micon cl"></span><span>InvitationRow</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/InviteLinkRow$.html"><span class="micon ob"></span><span>InviteLinkRow</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/InviteLinkRow.html"><span class="micon cl"></span><span>InviteLinkRow</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/LinkService$.html"><span class="micon ob"></span><span>LinkService</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/LinkService.html"><span class="micon cl"></span><span>LinkService</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/LinkStore.html"><span class="micon cl"></span><span>LinkStore</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/LinkStore$.html"><span class="micon ob"></span><span>LinkStore</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/Mail.html"><span class="micon cl"></span><span>Mail</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/Mailer.html"><span class="micon tr"></span><span>Mailer</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/Mailer$.html"><span class="micon ob"></span><span>Mailer</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/Mailing.html"><span class="micon cl"></span><span>Mailing</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/MemberRow.html"><span class="micon cl"></span><span>MemberRow</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/Offer.html"><span class="micon cl"></span><span>Offer</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/Passwords$.html"><span class="micon ob"></span><span>Passwords</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/Permissions.html"><span class="micon cl"></span><span>Permissions</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/RecoveryCode$.html"><span class="micon ob"></span><span>RecoveryCode</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/RecoveryCodeRow.html"><span class="micon cl"></span><span>RecoveryCodeRow</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/RequestRow.html"><span class="micon cl"></span><span>RequestRow</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/SentMailRow.html"><span class="micon cl"></span><span>SentMailRow</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/SessionCookie.html"><span class="micon cl"></span><span>SessionCookie</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/SessionCookie$.html"><span class="micon ob"></span><span>SessionCookie</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/SessionRow.html"><span class="micon cl"></span><span>SessionRow</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/SharingService$.html"><span class="micon ob"></span><span>SharingService</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/SharingService.html"><span class="micon cl"></span><span>SharingService</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/Transactor.html"><span class="micon tr"></span><span>Transactor</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/UserRow.html"><span class="micon cl"></span><span>UserRow</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/UserStore$.html"><span class="micon ob"></span><span>UserStore</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/UserStore.html"><span class="micon cl"></span><span>UserStore</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../server/Username$.html"><span class="micon ob"></span><span>Username</span></a></span></div></div><div class="ni n1"><span class="nh "><button class="ar icon-button "></button><a href="../smtp.html"><span class="micon pa"></span><span>smtp</span></a></span><div class="ni n2 "><span class="nh "><a href="../smtp/SmtpLogin.html"><span class="micon cl"></span><span>SmtpLogin</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../smtp/SmtpMailer.html"><span class="micon cl"></span><span>SmtpMailer</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../smtp/SmtpMailer$.html"><span class="micon ob"></span><span>SmtpMailer</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../smtp/SmtpSecurity.html"><span class="micon en"></span><span>SmtpSecurity</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../smtp/SmtpSecurity$.html"><span class="micon ob"></span><span>SmtpSecurity</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../smtp/SmtpSettings$.html"><span class="micon ob"></span><span>SmtpSettings</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../smtp/SmtpSettings.html"><span class="micon cl"></span><span>SmtpSettings</span></a></span></div></div><div class="ni n1"><span class="nh "><button class="ar icon-button "></button><a href="../tapir.html"><span class="micon pa"></span><span>tapir</span></a></span><div class="ni n2 "><span class="nh "><a href="../tapir/AuthApi$.html"><span class="micon ob"></span><span>AuthApi</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../tapir/GroupApi$.html"><span class="micon ob"></span><span>GroupApi</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../tapir/LinkApi$.html"><span class="micon ob"></span><span>LinkApi</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../tapir/Principals$.html"><span class="micon ob"></span><span>Principals</span></a></span></div><div class="ni n2 "><span class="nh "><a href="../tapir/Schemas$.html"><span class="micon ob"></span><span>Schemas</span></a></span></div><div class="ni n2"><span class="nh "><button class="ar icon-button "></button><a href="../tapir/SharingApi$.html"><span class="micon ob"></span><span>SharingApi</span></a></span><div class="ni n3 "><span class="nh "><a href="../tapir/SharingApi$$Endpoints.html"><span class="micon cl"></span><span>Endpoints</span></a></span></div></div></div></div></nav></div><div id="footer" class="body-small"><div class="left-container">Generated with</div><div class="right-container"><div class="text"></div></div><div class="text-mobile"></div></div><div id="scaladoc-searchBar"></div><div id="main"><div class="breadcrumbs container"><a href="../../../../index.html">Hecate</a>/<a href="../../hecate.html">com.alecdorrington.hecate</a>/<a href="../api.html">com.alecdorrington.hecate.api</a>/<a href="Protocol$.html">Protocol</a></div><div id="content" class="body-medium"><div><div class="cover-header">
+ <span class="icon"><span class="micon ob"></span></span>
+ <h1 class="h600 single">Protocol</h1>
+</div>
+<div class="fqname body-large">
+ <span>com.alecdorrington.hecate.api.Protocol</span>
+</div>
+<div class="main-signature mono-small-block">
+ <div class="signature">
+  <span class="modifiers"></span><span class="kind"><span t="k">object </span></span><a href="Protocol$.html" t="n" class="documentableName ">Protocol</a>
+ </div>
+</div>
+<div class="cover">
+ <div class="doc">
+  <p>The cookies and text length limits that every server and client of this library's API agree on. The server enforces the limits, so that nothing longer is ever stored, hashed or compared.</p>
+ </div>
+ <section id="attributes">
+  <h2 class="h500">Attributes</h2>
+  <dl class="attributes">
+   <dt class="body-small">Graph</dt>
+   <dd class="body-medium">
+    <div id="inheritance-diagram" class="diagram-class showGraph">
+     <button type="button" class="label-only-button" onclick="zoomOut()">Reset zoom</button><button type="button" class="label-only-button" onclick="hideGraph()">Hide graph</button><button type="button" class="label-only-button" onclick="showGraph()">Show graph</button>
+     <svg id="graph"></svg>
+     <script type="text/dot" id="dot"> digraph g {
+ node0 [id=node0, label="<span style=\"color: #FFFFFF;\">object <a href=\"Protocol$.html\" t=\"n\">Protocol</a></span>", class="object vertex"];
+node1 [id=node1, label="<span style=\"color: #FFFFFF;\">class <span data-unresolved-link=\"\" t=\"n\">Object</span></span>", class="class vertex"];
+node2 [id=node2, label="<span style=\"color: #FFFFFF;\">class <span data-unresolved-link=\"\" t=\"n\">Any</span></span>", class="class vertex"];
+node3 [id=node3, label="<span style=\"color: #FFFFFF;\">trait <span data-unresolved-link=\"\" t=\"n\">Matchable</span></span>", class="trait vertex"];
+
+
+ node0 -> node1;
+node1 -> node2;
+node1 -> node3;
+node3 -> node2;
+
+}
+</script>
+    </div>
+   </dd>
+   <dt class="body-small">Supertypes</dt>
+   <dd class="body-medium">
+    <div class="mono-small-block supertypes">
+     <div>
+      class <span data-unresolved-link="" t="n">Object</span>
+     </div>
+     <div>
+      trait <span data-unresolved-link="" t="n">Matchable</span>
+     </div>
+     <div>
+      class <span data-unresolved-link="" t="n">Any</span>
+     </div>
+     <span></span>
+    </div>
+   </dd>
+   <dt class="body-small">Self type</dt>
+   <dd class="body-medium">
+    <div class="mono-small-block supertypes">
+     <span></span>
+     <div>
+      <a href="Protocol$.html" t="n">Protocol</a>.<span t="k">type</span>
+     </div>
+    </div>
+   </dd>
+  </dl>
+ </section>
+</div>
+<section id="members-list">
+ <h2 class="h500">Members list</h2>
+ <div class="documentableFilter">
+  <div class="filtersContainer"></div>
+  <input class="filterableInput" placeholder="Filter by any phrase" data-test-id="filterBarInput" type="search"><button class="clearButton label-only-button" data-test-id="filterBarClearButton">Clear all</button>
+ </div>
+ <div class="membersList expand">
+  <div class="tabs">
+   <div class="contents">
+    <section id="Value-members">
+     <div data-togglable="Value members" class="tab expand">
+      <div class="member-group-header">
+       <h3 data-togglable="Value members" class="h400">Value members</h3>
+      </div>
+      <section id="Concrete-fields">
+       <div class="documentableList expand">
+        <div class="documentableList-expander">
+         <button class="icon-button show-content expand"></button>
+         <h4 class="groupHeader h200">Concrete fields</h4>
+        </div>
+        <div class="documentableElement" id="languageCookie-0">
+         <div class="documentableElement-expander">
+          <button class="icon-button ar show-content"></button>
+          <div class="header monospace mono-medium">
+           <div class="signature">
+            <span class="modifiers"></span><span class="kind"><span t="k">val </span></span><a href="Protocol$.html#languageCookie-0" t="n" class="documentableName ">languageCookie</a>: <span data-unresolved-link="" t="t">String</span>
+           </div>
+          </div>
+         </div>
+         <div class="docs">
+          <span class="modifiers"></span>
+          <div>
+           <div class="originInfo"></div>
+           <div class="memberDocumentation">
+            <div class="documentableBrief doc">
+             <p>The name of the cookie naming the language refusals are worded in. The client sets it for its whole origin; the server only passes its value on to the host's wording.</p>
+            </div>
+            <div class="cover">
+             <div class="doc">
+              <p>The name of the cookie naming the language refusals are worded in. The client sets it for its whole origin; the server only passes its value on to the host's wording.</p>
+             </div>
+             <h2 class="h200">Attributes</h2>
+             <dl class="attributes attributes-small"></dl>
+            </div>
+           </div>
+          </div>
+         </div>
+        </div>
+        <div class="documentableElement" id="maxEmailLength-0">
+         <div class="documentableElement-expander">
+          <button class="icon-button ar show-content"></button>
+          <div class="header monospace mono-medium">
+           <div class="signature">
+            <span class="modifiers"></span><span class="kind"><span t="k">val </span></span><a href="Protocol$.html#maxEmailLength-0" t="n" class="documentableName ">maxEmailLength</a>: <span data-unresolved-link="" t="t">Int</span>
+           </div>
+          </div>
+         </div>
+         <div class="docs">
+          <span class="modifiers"></span>
+          <div>
+           <div class="originInfo"></div>
+           <div class="memberDocumentation">
+            <div class="documentableBrief doc">
+             <p>The most characters an email address may have, as mail allows.</p>
+            </div>
+            <div class="cover">
+             <div class="doc">
+              <p>The most characters an email address may have, as mail allows.</p>
+             </div>
+             <h2 class="h200">Attributes</h2>
+             <dl class="attributes attributes-small"></dl>
+            </div>
+           </div>
+          </div>
+         </div>
+        </div>
+        <div class="documentableElement" id="maxGuestNameLength-0">
+         <div class="documentableElement-expander">
+          <button class="icon-button ar show-content"></button>
+          <div class="header monospace mono-medium">
+           <div class="signature">
+            <span class="modifiers"></span><span class="kind"><span t="k">val </span></span><a href="Protocol$.html#maxGuestNameLength-0" t="n" class="documentableName ">maxGuestNameLength</a>: <span data-unresolved-link="" t="t">Int</span>
+           </div>
+          </div>
+         </div>
+         <div class="docs">
+          <span class="modifiers"></span>
+          <div>
+           <div class="originInfo"></div>
+           <div class="memberDocumentation">
+            <div class="documentableBrief doc">
+             <p>The most characters the name a guest gives may have: a username's, less room for the number that tells two guests of the same name apart.</p>
+            </div>
+            <div class="cover">
+             <div class="doc">
+              <p>The most characters the name a guest gives may have: a username's, less room for the number that tells two guests of the same name apart.</p>
+             </div>
+             <h2 class="h200">Attributes</h2>
+             <dl class="attributes attributes-small"></dl>
+            </div>
+           </div>
+          </div>
+         </div>
+        </div>
+        <div class="documentableElement" id="maxNameLength-0">
+         <div class="documentableElement-expander">
+          <button class="icon-button ar show-content"></button>
+          <div class="header monospace mono-medium">
+           <div class="signature">
+            <span class="modifiers"></span><span class="kind"><span t="k">val </span></span><a href="Protocol$.html#maxNameLength-0" t="n" class="documentableName ">maxNameLength</a>: <span data-unresolved-link="" t="t">Int</span>
+           </div>
+          </div>
+         </div>
+         <div class="docs">
+          <span class="modifiers"></span>
+          <div>
+           <div class="originInfo"></div>
+           <div class="memberDocumentation">
+            <div class="documentableBrief doc">
+             <p>The most characters a username, group name or recovery code may have.</p>
+            </div>
+            <div class="cover">
+             <div class="doc">
+              <p>The most characters a username, group name or recovery code may have.</p>
+             </div>
+             <h2 class="h200">Attributes</h2>
+             <dl class="attributes attributes-small"></dl>
+            </div>
+           </div>
+          </div>
+         </div>
+        </div>
+        <div class="documentableElement" id="maxPasswordLength-0">
+         <div class="documentableElement-expander">
+          <button class="icon-button ar show-content"></button>
+          <div class="header monospace mono-medium">
+           <div class="signature">
+            <span class="modifiers"></span><span class="kind"><span t="k">val </span></span><a href="Protocol$.html#maxPasswordLength-0" t="n" class="documentableName ">maxPasswordLength</a>: <span data-unresolved-link="" t="t">Int</span>
+           </div>
+          </div>
+         </div>
+         <div class="docs">
+          <span class="modifiers"></span>
+          <div>
+           <div class="originInfo"></div>
+           <div class="memberDocumentation">
+            <div class="documentableBrief doc">
+             <p>The most characters a password may have. Hashing takes time in proportion to length, before anyone is authenticated, so longer passwords are refused before they are hashed.</p>
+            </div>
+            <div class="cover">
+             <div class="doc">
+              <p>The most characters a password may have. Hashing takes time in proportion to length, before anyone is authenticated, so longer passwords are refused before they are hashed.</p>
+             </div>
+             <h2 class="h200">Attributes</h2>
+             <dl class="attributes attributes-small"></dl>
+            </div>
+           </div>
+          </div>
+         </div>
+        </div>
+        <div class="documentableElement" id="sessionCookie-0">
+         <div class="documentableElement-expander">
+          <button class="icon-button ar show-content"></button>
+          <div class="header monospace mono-medium">
+           <div class="signature">
+            <span class="modifiers"></span><span class="kind"><span t="k">val </span></span><a href="Protocol$.html#sessionCookie-0" t="n" class="documentableName ">sessionCookie</a>: <span data-unresolved-link="" t="t">String</span>
+           </div>
+          </div>
+         </div>
+         <div class="docs">
+          <span class="modifiers"></span>
+          <div>
+           <div class="originInfo"></div>
+           <div class="memberDocumentation">
+            <div class="documentableBrief doc">
+             <p>The name of the cookie that holds the session token.</p>
+            </div>
+            <div class="cover">
+             <div class="doc">
+              <p>The name of the cookie that holds the session token.</p>
+             </div>
+             <h2 class="h200">Attributes</h2>
+             <dl class="attributes attributes-small"></dl>
+            </div>
+           </div>
+          </div>
+         </div>
+        </div>
+       </div>
+      </section>
+     </div>
+    </section>
+   </div>
+  </div>
+ </div>
+</section></div><div id="toc" class="body-small"><div id="toc-container"><span class="toc-title h200">In this article</span><nav class="toc-nav"><ul class="toc-list"><li><a href="#attributes">Attributes</a></li><li><a href="#members-list">Members list</a><ul><li><a href="#Value-members">Value members</a><ul><li><a href="#Concrete-fields">Concrete fields</a></li></ul></li></ul></li></ul></nav></div></div></div><div id="footer" class="body-small mobile-footer"><div class="left-container">Generated with</div><div class="right-container"><div class="text"></div></div><div class="text-mobile"></div></div></div></div></body></html>
