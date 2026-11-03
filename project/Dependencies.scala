@@ -5,7 +5,7 @@ object Dependencies:
 
   object V:
 
-    val tapir           = "1.14.0"
+    val tapir           = "1.14.1"
     val circe           = "0.14.17"
     val catsEffect      = "3.7.1"
     val slick           = "3.6.1"
@@ -15,7 +15,7 @@ object Dependencies:
     val munitCatsEffect = "2.2.1"
     val sttpClient      = "3.11.0"
     val angusMail       = "2.0.5"
-    val greenMail       = "2.1.14"
+    val greenMail       = "2.1.15"
 
   lazy val tapir = libraryDependencies ++= Seq(
     "com.softwaremill.sttp.tapir" %% "tapir-core"       % V.tapir,
@@ -48,9 +48,8 @@ object Dependencies:
   lazy val scalajs = libraryDependencies ++=
     Seq("org.scala-js" %% "scalajs-dom" % V.scalajs)
 
-  lazy val laminar = libraryDependencies ++= Seq(
-    "com.raquo" %% "laminar" % V.laminar,
-  )
+  lazy val laminar = libraryDependencies ++=
+    Seq("com.raquo" %% "laminar" % V.laminar)
 
   lazy val munitCatsEffect = libraryDependencies ++=
     Seq("org.typelevel" %% "munit-cats-effect" % V.munitCatsEffect % Test)
