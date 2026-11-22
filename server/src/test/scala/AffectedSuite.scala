@@ -4,7 +4,8 @@ package server
 import Fixtures.{cheap, enrol}
 import cats.effect.{IO, Ref}
 import com.alecdorrington.hecate.model.{
-  Access, GroupDetails, Invitee, LinkTarget, PasswordChange, Resource, User,
+  Access, GroupDetails, Invitee, InviteStatus, LinkTarget, PasswordChange,
+  Resource, User,
 }
 import munit.CatsEffectSuite
 import slick.dbio.DBIO
@@ -93,7 +94,7 @@ class AffectedSuite extends CatsEffectSuite:
           .invite(
             owner,
             team.id,
-            Invitee(invitee.username),
+            Invitee.Person(invitee.username),
           )
         told <- world.reported
         sent <- world.groups.invitations(invitee.id)
@@ -103,9 +104,15 @@ class AffectedSuite extends CatsEffectSuite:
           .invite(
             owner,
             team.id,
-            Invitee(invitee.username),
+            Invitee.Person(invitee.username),
           )
-        _     <- world.service.invite(owner, team.id, Invitee(owner.username))
+        _ <- world
+          .service
+          .invite(
+            owner,
+            team.id,
+            Invitee.Person(owner.username),
+          )
         again <- world.reported
       yield
         assert(told.headOption.exists(_.isInstanceOf[Affected.Groups]))
@@ -214,6 +221,61 @@ class AffectedSuite extends CatsEffectSuite:
           "a stranger renamed someone else's group",
         )
         assertEquals(none, List.empty)
+
+  test("inviting a group reports who may answer it, beside both groups"):
+    served: world =>
+      for
+        lead     <- world.signUp("lead")
+        captain  <- world.signUp("captain")
+        research <- world.groups.create(lead.id, GroupDetails("Research"))
+        crew     <- world.groups.create(captain.id, GroupDetails("Crew"))
+        _        <- world.join(captain, crew.id, lead)
+        _        <- world.reported
+        result   <- world
+          .service
+          .invite(
+            lead,
+            research.id,
+            Invitee.Group(crew.id),
+          )
+        told <- world.reported
+        sent <- world.groups.groupInvitations(captain.id)
+        self <- world
+          .service
+          .invite(
+            lead,
+            research.id,
+            Invitee.Person("lead"),
+          )
+      yield
+        assertEquals(
+          result.map(_.status),
+          Right(InviteStatus.Invited),
+        )
+        assertEquals(
+          result.map(_.invitee.name),
+          Right(Some("Crew")),
+        )
+        assertEquals(
+          told.collect { case invited: Affected.GroupInvited => invited },
+          List(Affected.GroupInvited(
+            sent.head.id,
+            research.id,
+            crew.id,
+            Set(captain.id),
+          )),
+        )
+        assert(
+          told.exists:
+            case Affected.Groups(Audience.People(people), _) =>
+              people(captain.id) && people(lead.id)
+            case _ => false,
+          "the groups' managers were not told",
+        )
+        assertEquals(
+          self.map(_.status),
+          Right(InviteStatus.Joined),
+        )
 
 object AffectedSuite:
 

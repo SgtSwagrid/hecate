@@ -6,12 +6,13 @@ import com.alecdorrington.hecate.api.Protocol.{
 }
 import com.alecdorrington.hecate.model.{
   Access, AccountCreation, AuthRules, CreatedAccount, Credentials, EmailChange,
-  EmailConfirmation, EmailStatus, Gated, Grant, Group, GroupDetails, Guest,
-  Holder, Invitation, Invitee, InviteLink, JoinableGroup, LinkPreview,
-  LinkTarget, ManagedAccount, ManagedGroup, Manager, Membership, NewAccount,
-  PasswordChange, PasswordCheck, PasswordReplacement, PasswordReset,
-  PasswordResetRequest, PasswordSet, PasswordSetting, Permitted, Principal,
-  Recovery, RecoveryCodes, Resource, User, UsernameChange, Welcome,
+  EmailConfirmation, EmailStatus, Gated, Grant, Group, GroupDetails,
+  GroupInvitation, Guest, Holder, Invitation, Invitee, InviteLink, InviteResult,
+  InviteStatus, JoinableGroup, LinkPreview, LinkTarget, ManagedAccount,
+  ManagedGroup, Manager, Membership, NewAccount, PasswordChange, PasswordCheck,
+  PasswordReplacement, PasswordReset, PasswordResetRequest, PasswordSet,
+  PasswordSetting, Permitted, Principal, Recovery, RecoveryCodes, Resource,
+  User, UsernameChange, Welcome,
 }
 import sttp.tapir.{FieldName, Schema, SchemaType, Validator}
 
@@ -32,16 +33,58 @@ object Schemas:
   // Bounds every name; passwords and email addresses are bounded below.
   private given Schema[String] = bounded(maxNameLength)
 
-  given Schema[User]          = Schema.derived
-  given Schema[AuthRules]     = Schema.derived
-  given Schema[RecoveryCodes] = Schema.derived
-  given Schema[Group]         = Schema.derived
-  given Schema[ManagedGroup]  = Schema.derived
-  given Schema[GroupDetails]  = Schema.derived
-  given Schema[Invitation]    = Schema.derived
-  given Schema[Invitee]       = Schema.derived
-  given Schema[JoinableGroup] = Schema.derived
-  given Schema[Membership]    = Schema.derived
+  given Schema[User]            = Schema.derived
+  given Schema[AuthRules]       = Schema.derived
+  given Schema[RecoveryCodes]   = Schema.derived
+  given Schema[Group]           = Schema.derived
+  given Schema[ManagedGroup]    = Schema.derived
+  given Schema[GroupDetails]    = Schema.derived
+  given Schema[Invitation]      = Schema.derived
+  given Schema[GroupInvitation] = Schema.derived
+  given Schema[JoinableGroup]   = Schema.derived
+  given Schema[Membership]      = Schema.derived
+
+  /**
+    * The schema of an invitee as its codec sends it: its kind, then a person's
+    * username or a group's id.
+    */
+  given Schema[Invitee] = Schema(
+    SchemaType.SProduct(List(
+      SchemaType.SProductField[Invitee, String](
+        FieldName("kind"),
+        Schema
+          .string
+          .validate(Validator.enumeration(
+            List(Invitee.personKind, Invitee.groupKind),
+          )),
+        invitee => Some(invitee.kind),
+      ),
+      SchemaType.SProductField[Invitee, Option[String]](
+        FieldName("username"),
+        summon[Schema[String]].asOption,
+        {
+          case Invitee.Person(username) => Some(Some(username))
+          case _                        => None
+        },
+      ),
+      SchemaType.SProductField[Invitee, Option[Long]](
+        FieldName("id"),
+        Schema.schemaForLong.asOption,
+        {
+          case Invitee.Group(id) => Some(Some(id))
+          case _                 => None
+        },
+      ),
+    )),
+    Some(Schema.SName("Invitee")),
+  )
+
+  given Schema[InviteStatus] = Schema
+    .string
+    .validate(Validator.enumeration(
+      InviteStatus.values.toList,
+      status => Some(status.code),
+    ))
 
   given Schema[Access] = Schema
     .string
@@ -77,6 +120,8 @@ object Schemas:
   )
 
   given Schema[Holder] = Schema.derived
+
+  given Schema[InviteResult] = Schema.derived
 
   given Schema[Grant] = Schema.derived
 

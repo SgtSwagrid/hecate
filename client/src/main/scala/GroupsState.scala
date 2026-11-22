@@ -3,8 +3,8 @@ package client
 
 import com.alecdorrington.hecate.i18n.Wording
 import com.alecdorrington.hecate.model.{
-  Access, GroupDetails, Invitation, Invitee, JoinableGroup, ManagedGroup,
-  Membership, Principal, User,
+  Access, GroupDetails, GroupInvitation, Invitation, Invitee, InviteResult,
+  JoinableGroup, ManagedGroup, Membership, Principal, User,
 }
 import com.raquo.laminar.api.L.*
 import io.circe.Decoder
@@ -71,6 +71,13 @@ final class GroupsState
   /** The pending invitations sent to the signed-in user. */
   val invitations: Signal[List[Invitation]] =
     listed[Invitation]("/api/invitations")
+
+  /**
+    * The pending invitations for groups the signed-in user may change to become
+    * members of others.
+    */
+  val groupInvitations: Signal[List[GroupInvitation]] =
+    listed[GroupInvitation]("/api/group-invitations")
 
   /**
     * The groups the signed-in user may ask to join or has asked to join,
@@ -164,18 +171,73 @@ final class GroupsState
   def delete(group: Long): Unit = perform(Fetch.delete(s"/api/groups/$group"))
 
   /**
-    * Invites a user to a group.
+    * Invites a person or a group to a group. Its outcome goes to the callbacks
+    * alone, never to [[error]], so that a caller says it beside whatever sent
+    * the invitation.
     *
     * @param group
     *   The identifier of the group.
     *
-    * @param username
-    *   The username of the user to invite.
+    * @param invitee
+    *   The person, by username, or the group to invite.
+    *
+    * @param answered
+    *   The callback given whom was invited and what came of it.
+    *
+    * @param refused
+    *   The callback given the reason the invitation was refused or could not be
+    *   sent.
     */
-  def invite(group: Long, username: String): Unit = perform(Fetch.post(
+  def invite
+    (
+      group: Long,
+      invitee: Invitee,
+      answered: InviteResult => Unit = _ => (),
+      refused: String => Unit = _ => (),
+    )
+    : Unit = sending(Fetch.post(
     s"/api/groups/$group/invitations",
-    body = Invitee(username),
-  ))
+    body = invitee,
+  )):
+    case Outcome.Answered(response) => decode[InviteResult](response.data).fold(
+        _ => refused(wording.unreachable),
+        answered,
+      )
+    case Outcome.Refused(reason) => refused(reason)
+    case Outcome.Unreachable(_)  => refused(wording.unreachable)
+
+  /**
+    * Takes a group out of another, or withdraws its invitation to it, for
+    * someone who may change either.
+    *
+    * @param group
+    *   The identifier of the group it is a member of or invited to.
+    *
+    * @param member
+    *   The identifier of the member group.
+    */
+  def removeGroup(group: Long, member: Long): Unit =
+    perform(Fetch.delete(s"/api/groups/$group/member-groups/$member"))
+
+  /**
+    * Accepts an invitation for a group the signed-in user may change, making it
+    * a member of the other.
+    *
+    * @param invitation
+    *   The identifier of the invitation.
+    */
+  def acceptGroup(invitation: Long): Unit =
+    perform(Fetch.post(s"/api/group-invitations/$invitation/accept"))
+
+  /**
+    * Declines an invitation for a group the signed-in user may change, deleting
+    * it.
+    *
+    * @param invitation
+    *   The identifier of the invitation.
+    */
+  def declineGroup(invitation: Long): Unit =
+    perform(Fetch.post(s"/api/group-invitations/$invitation/decline"))
 
   /**
     * Removes a member from a group, cancels their invitation, or declines their
@@ -331,15 +393,21 @@ final class GroupsState
     )
     : Unit =
     errorVar.set(None)
-    Outcome.tracked(auth.outcome(request), pendingVar): outcome =>
-      outcome match
-        case Outcome.Answered(_)     => errorVar.set(None)
-        case Outcome.Refused(reason) =>
-          errorVar.set(Some(reason))
-          refused(reason)
-          // Not a refusal, so `refused` is not called.
-        case Outcome.Unreachable(_) => errorVar.set(Some(wording.unreachable))
-      refresh()
+    sending(request):
+      case Outcome.Answered(_)     => errorVar.set(None)
+      case Outcome.Refused(reason) =>
+        errorVar.set(Some(reason))
+        refused(reason)
+        // Not a refusal, so `refused` is not called.
+      case Outcome.Unreachable(_) => errorVar.set(Some(wording.unreachable))
+
+  /** Sends a command, hands its outcome over, then refetches every list. */
+  private def sending
+    (request: EventStream[Response])
+    (handle: Outcome => Unit)
+    : Unit = Outcome.tracked(auth.outcome(request), pendingVar): outcome =>
+    handle(outcome)
+    refresh()
 
 object GroupsState:
 

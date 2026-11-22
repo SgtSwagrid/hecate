@@ -1,7 +1,8 @@
 package com.alecdorrington.hecate
 package model
 
-import io.circe.Codec
+import io.circe.{Codec, Decoder, Encoder, JsonObject}
+import io.circe.syntax.*
 
 /**
   * A named group of users, which may nest inside another group to any depth.
@@ -93,6 +94,19 @@ final case class Holder
   * @param inviteCode
   *   The code of the group's invite link, or `None` if it has none or the
   *   reader may not change who is in the group.
+  *
+  * @param memberGroups
+  *   The groups that are members of it, by name, whose members belong to it
+  *   through them, each with its parent withheld. Nested groups are not among
+  *   them.
+  *
+  * @param invitedGroups
+  *   The groups invited to be members of it that have not yet accepted, by
+  *   name, each with its parent withheld.
+  *
+  * @param memberOf
+  *   The groups it is a member of, by name, each with its parent withheld,
+  *   which its members belong to through it.
   */
 final case class ManagedGroup
   (
@@ -102,6 +116,9 @@ final case class ManagedGroup
     invitees: List[User] = List.empty,
     applicants: List[User] = List.empty,
     inviteCode: Option[String] = None,
+    memberGroups: List[Group] = List.empty,
+    invitedGroups: List[Group] = List.empty,
+    memberOf: List[Group] = List.empty,
   )
   derives Codec.AsObject
 
@@ -121,6 +138,10 @@ final case class ManagedGroup
   * @param enclosing
   *   The groups enclosing it, outermost first, which the reader belongs to
   *   through it, without their members.
+  *
+  * @param memberOf
+  *   The groups it is a member of, by name, which the reader belongs to through
+  *   it, without their members.
   */
 final case class Membership
   (
@@ -128,6 +149,7 @@ final case class Membership
     owners: List[Holder],
     members: List[User],
     enclosing: List[Group] = List.empty,
+    memberOf: List[Group] = List.empty,
   )
   derives Codec.AsObject
 
@@ -147,6 +169,33 @@ final case class Invitation
   (
     id: Long,
     group: Group,
+    inviter: Option[User],
+  )
+  derives Codec.AsObject
+
+/**
+  * A pending invitation for a group to become a member of another, as those who
+  * may change the invited group see it. Accepting makes the invited group's
+  * members, and those of every group within it, members of the other through
+  * it.
+  *
+  * @param id
+  *   The identifier of the invitation, assigned by the store.
+  *
+  * @param group
+  *   The group invited to, with its parent withheld.
+  *
+  * @param invitee
+  *   The group invited, with its parent withheld.
+  *
+  * @param inviter
+  *   The user who sent the invitation, or `None` if their account is gone.
+  */
+final case class GroupInvitation
+  (
+    id: Long,
+    group: Group,
+    invitee: Group,
     inviter: Option[User],
   )
   derives Codec.AsObject
@@ -172,10 +221,99 @@ final case class JoinableGroup
   )
   derives Codec.AsObject
 
+/** Whom to invite to a group: a person, or another group, as a member. */
+enum Invitee(val kind: String):
+
+  /**
+    * A person, named by their username.
+    *
+    * @param username
+    *   The username of the person to invite.
+    */
+  case Person(username: String) extends Invitee(Invitee.personKind)
+
+  /**
+    * A group, to become a member of the group invited to.
+    *
+    * @param id
+    *   The identifier of the group to invite.
+    */
+  case Group(id: Long) extends Invitee(Invitee.groupKind)
+
+object Invitee:
+
+  /** The sent name of the kind of an [[Invitee.Person]]. */
+  val personKind: String = "person"
+
+  /** The sent name of the kind of an [[Invitee.Group]]. */
+  val groupKind: String = "group"
+
+  given Codec.AsObject[Invitee] = Codec
+    .AsObject
+    .from(
+      Decoder[String]
+        .at("kind")
+        .flatMap:
+          case `personKind` => Decoder[String].at("username").map(Person(_))
+          case `groupKind`  => Decoder[Long].at("id").map(Group(_))
+          case other        =>
+            Decoder.failedWithMessage(s"Unknown kind of invitee `$other`."),
+      Encoder
+        .AsObject
+        .instance:
+          case Person(username) => JsonObject(
+              "kind"     -> personKind.asJson,
+              "username" -> username.asJson,
+            )
+          case Group(id) => JsonObject(
+              "kind" -> groupKind.asJson,
+              "id"   -> id.asJson,
+            ),
+    )
+
+/** What inviting someone or a group to a group came to. */
+enum InviteStatus(val code: String):
+
+  /** An invitation awaits their answer, sent now or before. */
+  case Invited extends InviteStatus("invited")
+
+  /**
+    * They joined at once: the inviter may agree for them, or they had asked to
+    * join.
+    */
+  case Joined extends InviteStatus("joined")
+
+  /** They were a member already, and nothing changed. */
+  case Member extends InviteStatus("member")
+
+object InviteStatus:
+
+  /**
+    * Finds the status a code names.
+    *
+    * @param code
+    *   The status's code.
+    *
+    * @return
+    *   The status, or `None` for an unknown code.
+    */
+  def fromCode(code: String): Option[InviteStatus] = values.find(_.code == code)
+
+  given Codec[InviteStatus] = Codec.from(
+    Decoder
+      .decodeString
+      .emap(code => fromCode(code).toRight(s"Unknown invite status `$code`.")),
+    Encoder.encodeString.contramap(_.code),
+  )
+
 /**
-  * A user to invite to a group, named by their username.
+  * What inviting someone or a group to a group came to.
   *
-  * @param username
-  *   The username of the user to invite.
+  * @param invitee
+  *   The person or group invited, named as stored.
+  *
+  * @param status
+  *   Whether they were invited, joined at once, or were a member already.
   */
-final case class Invitee(username: String) derives Codec.AsObject
+final case class InviteResult(invitee: Holder, status: InviteStatus)
+  derives Codec.AsObject

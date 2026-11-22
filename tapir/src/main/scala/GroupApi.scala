@@ -2,8 +2,8 @@ package com.alecdorrington.hecate
 package tapir
 
 import com.alecdorrington.hecate.model.{
-  Group, GroupDetails, Invitation, Invitee, JoinableGroup, ManagedGroup,
-  Membership, Principal, User,
+  Group, GroupDetails, GroupInvitation, Invitation, Invitee, InviteResult,
+  JoinableGroup, ManagedGroup, Membership, Principal,
 }
 import com.alecdorrington.hecate.tapir.Schemas.given
 import sttp.tapir.*
@@ -161,16 +161,55 @@ object GroupApi:
     .in(group / "invite-link")
 
   /**
-    * An endpoint that invites a user, by username, to a group, returning the
-    * user. Inviting a member or an invitee changes nothing; inviting an
-    * applicant admits them, and inviting oneself joins.
+    * An endpoint that invites a person, by username, or a group, as a member,
+    * to a group, answering whom it invited and what came of it. Inviting a
+    * member or an invitee changes nothing; inviting an applicant admits them,
+    * and inviting oneself, or anyone or any group the inviter may agree for,
+    * joins.
     */
-  val invite: AuthApi.Secured[(Long, Invitee), User] = AuthApi
+  val invite: AuthApi.Secured[(Long, Invitee), InviteResult] = AuthApi
     .secured
     .post
     .in(group / "invitations")
     .in(jsonBody[Invitee])
-    .out(jsonBody[User])
+    .out(jsonBody[InviteResult])
+
+  /**
+    * An endpoint that takes a group out of another, or withdraws its invitation
+    * to it, for whoever may change either.
+    */
+  val removeGroup: AuthApi.Secured[(Long, Long), Unit] = AuthApi
+    .secured
+    .delete
+    .in(group / "member-groups" / path[Long]("member"))
+
+  /**
+    * An endpoint that lists the pending invitations for groups the signed-in
+    * user may change to become members of others.
+    */
+  val groupInvitations: AuthApi.Secured[Unit, List[GroupInvitation]] = AuthApi
+    .secured
+    .get
+    .in("api" / "group-invitations")
+    .out(jsonBody[List[GroupInvitation]])
+
+  /**
+    * An endpoint that accepts an invitation for a group the signed-in user may
+    * change, making it a member of the other.
+    */
+  val acceptGroup: AuthApi.Secured[Long, Unit] = AuthApi
+    .secured
+    .post
+    .in("api" / "group-invitations" / path[Long]("invitation") / "accept")
+
+  /**
+    * An endpoint that declines an invitation for a group the signed-in user may
+    * change, deleting it.
+    */
+  val declineGroup: AuthApi.Secured[Long, Unit] = AuthApi
+    .secured
+    .post
+    .in("api" / "group-invitations" / path[Long]("invitation") / "decline")
 
   /**
     * An endpoint that admits to a group a user who has asked to join it.

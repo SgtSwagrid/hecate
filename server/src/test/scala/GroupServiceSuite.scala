@@ -20,11 +20,15 @@ class GroupServiceSuite extends CatsEffectSuite:
   test("text too long, or a store's refusal, is answered as a value, unstored"):
     serving: (service, groups, users) =>
       for
-        owner    <- register(users, "owner")
-        created  <- service.create(owner, GroupDetails(overlong))
-        stored   <- groups.managed(owner.id)
-        team     <- groups.create(owner.id, GroupDetails("Team"))
-        invited  <- service.invite(owner, team.id, Invitee(overlong))
+        owner   <- register(users, "owner")
+        created <- service.create(owner, GroupDetails(overlong))
+        stored  <- groups.managed(owner.id)
+        team    <- groups.create(owner.id, GroupDetails("Team"))
+        invited <- service.invite(
+          owner,
+          team.id,
+          Invitee.Person(overlong),
+        )
         stranger <- register(users, "stranger")
         deleted  <- service.delete(stranger, team.id)
       yield
@@ -34,7 +38,7 @@ class GroupServiceSuite extends CatsEffectSuite:
         )
         assertEquals(stored, Nil)
         assertEquals(
-          invited.map(_.id),
+          invited.map(_.status),
           Left(AuthRefusal.TooLong(Protocol.maxNameLength)),
         )
         assertEquals(deleted, Left(AuthRefusal.GroupMissing))
