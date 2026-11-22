@@ -162,9 +162,10 @@ final class AuthState(wording: Wording = Wording.english):
   def signIn(username: String, password: String): Unit = signInWith(
     "/api/auth/sign-in",
     Credentials(username, password),
-    refused = response =>
-      if response.status == Protocol.replacementStatus then
-        replacingVar.set(Some(username)),
+    answering = {
+      case response if response.status == Protocol.replacementStatus =>
+        replacingVar.set(Some(username))
+    },
   )
 
   /**
@@ -476,21 +477,26 @@ final class AuthState(wording: Wording = Wording.english):
       url: String,
       body: X,
       notice: Option[String] = None,
-      refused: Response => Unit = _ => (),
+      answering: PartialFunction[Response, Unit] = PartialFunction.empty,
       signedIn: () => Unit = () => (),
     )
-    : Unit = perform(
-    Fetch
-      .post(url, body = body)
-      .map(response =>
-        if response.status >= 400 then refused(response)
-        response,
+    : Unit =
+    clearMessages()
+    Outcome.tracked(
+      Outcome.unless(
+        Fetch.post(url, body = body),
+        answering.isDefinedAt,
       ),
-  ): response =>
-    adopt[User](response): user =>
-      signedIn()
-      userVar.set(Some(user))
-      if notice.isDefined then noticeVar.set(notice)
+      pendingVar,
+    ):
+      case Left(refusal)                     => answering(refusal)
+      case Right(Outcome.Answered(response)) => adopt[User](response): user =>
+          signedIn()
+          userVar.set(Some(user))
+          if notice.isDefined then noticeVar.set(notice)
+      case Right(Outcome.Refused(reason)) => errorVar.set(Some(reason))
+      case Right(Outcome.Unreachable(_))  =>
+        errorVar.set(Some(wording.unreachable))
 
   private def perform
     (request: EventStream[Response])
