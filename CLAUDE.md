@@ -62,6 +62,21 @@ for full stack websites built on Slick, Cats Effect and Laminar, and optionally 
   then the doomed groups, read again under their locks until none was nested beneath them meanwhile; sole ownership is
   read again under them, and a resource the hook no longer finds passes to nobody. An account takes the groups it alone
   owns, and those only such groups own (`GroupStore.soleGroupsOf`); a group someone else owns too survives.
+  An account is a resource too (`Resource.user`, kind `Resource.userKind`, reserved): grants over it decide
+  who *manages* it (`AccountService`, `AccountApi` at `/api/accounts`: `View` sees it, `Edit` renames it, sets
+  its password, suspends it and answers its invitations, `Own` deletes and releases it and shares it through
+  `SharingService`, served grants-only for kind `user`, which refuses invite links to accounts). Its own
+  user's powers come from being signed in, never from a grant: `Permissions` gives nobody access over their
+  own account (`ownAccount`, also leaving them out of `levels`, `accessible` and `holders`), `SharingService`
+  refuses a grant to a user over their own account, and the service refuses acting on oneself, all as
+  `ManagingSelf`. While managed, `AccountStore.deleteOwn` refuses the user (`AccountManaged`). Consent to join a
+  group may be given by whoever may change the person's account (`GroupStore.consentsFor`: `accept`,
+  `decline`, and `offer`, so inviting an account one manages joins it). Every account change locks the
+  user's row first, the lock `GroupStore.named` takes for kind `user`. Suspension is the one extra table,
+  `suspensions` (user id only): `sessionUser` ignores a suspended user's sessions whenever they were opened,
+  and sign-in, recovery and reset links refuse `Suspended` only once the secret is right (the latter two
+  inside their transaction, so nothing is used up). Hecate adds tables but never changes existing ones, as
+  hosts pin its layout and it has no migrations.
   Email is off unless the host passes `AuthService` a `Mailing`: its `Mailer` (`Mailer.logged` for development, `smtp`'s
   `SmtpMailer`, or the host's own), the site's name, the pages the links lead to (built from the host's own base URL, never the `Host`
   header) and the wording the mail is written in. `users.email` holds an address only once the link sent to it
@@ -120,8 +135,11 @@ when it was or is public; a followed link, a share or a changed link of a resour
 with `formerly`, everyone the grants reached before, read under the resource's lock (`Permissions.holding`) and only
 when the change lowers or withdraws someone's access (`SharingService.takes`), else empty;
 signing out, a new password or codes and recovery are `Affected.Account`; deleting an account concerns
-everyone. The one report saying what happened is `Affected.Invited`, beside an invitation's `Affected.Groups`,
-for a host notifying the invitee: `GroupStore.invite` answers an `Offer` naming the invitation it made, if any. A failure to work out an audience is reported, never failing the request. `Permissions.holders` is
+everyone. The reports saying what happened are `Affected.Invited`, beside an invitation's `Affected.Groups`,
+for a host notifying the invitee (`GroupStore.invite` answers an `Offer` naming the invitation it made, if any),
+and `Affected.PasswordSet`, a password a manager set, for telling its user who did it. A change to accounts
+as their managers see them is `Affected.Accounts` (managers before and after, and the accounts' users),
+and a change to who is in a group also concerns whoever manages the person's account (`GroupStore.membersChanged`). A failure to work out an audience is reported, never failing the request. `Permissions.holders` is
 the reverse of `access`: everyone a grant over a resource reaches. `AuthState.refresh` reads the account again
 without disturbing a user still signed in (`recheck` re-sets the user, which clears codes being shown).
 `/api/auth/me` answers an empty body when nobody is signed in (how `jsonBody[Option[_]]` sends `None`), which

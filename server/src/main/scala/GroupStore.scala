@@ -4,7 +4,8 @@ package server
 import cats.effect.IO
 import com.alecdorrington.hecate.model.{
   Access, AuthRefusal, Grant, Group, GroupDetails, Holder, Invitation,
-  JoinableGroup, LinkTarget, ManagedGroup, Membership, Principal, Resource, User,
+  JoinableGroup, LinkTarget, ManagedGroup, Manager, Membership, Principal,
+  Resource, User,
 }
 import slick.dbio.DBIO
 
@@ -87,14 +88,16 @@ final class GroupStore
     .map(row => (row.groupId, row.userId))
 
   /**
-    * The lookup of a resource's name that locks its row: a group's by this
-    * store, and any other by the host's `resources`. Pass this to
-    * [[SharingService]] and [[LinkService]], so that groups are shared like the
-    * host's resources.
+    * The lookup of a resource's name that locks its row: a group's or an
+    * account's by this store, and any other by the host's `resources`. Pass
+    * this to [[SharingService]] and [[LinkService]], so that groups and
+    * accounts are shared like the host's resources.
     */
   val named: Resource => DBIO[Option[String]] = resource =>
     if resource.kind == Resource.groupKind then
       lock(Seq(resource.id)).map(_.headOption.map(_.name))
+    else if resource.kind == Resource.userKind then
+      tables.lockUser(resource.id).map(_.map(_.username))
     else resources(resource)
 
   /**
@@ -232,23 +235,48 @@ final class GroupStore
     * username, then groups by name; groups nobody owns are absent.
     */
   private def ownersOf(groups: Seq[Long]): DBIO[Map[Long, List[Holder]]] =
+    managersAt(Resource.groupKind, groups, Access.Own).map(
+      _.view.mapValues(_.map(_.holder).distinct).toMap,
+    )
+
+  /**
+    * Whoever holds at least the given access over each of some resources of one
+    * kind, named, the highest access first, then the system, people by username
+    * and groups by name; resources nobody holds are absent. In the caller's
+    * transaction.
+    */
+  private[server] def managersAt
+    (
+      kind: String,
+      ids: Seq[Long],
+      least: Access,
+    )
+    : DBIO[Map[Long, List[Manager]]] =
     for
-      owning <- grants.grantedAt(Resource.groupKind, groups, Access.Own)
-      held = owning.map(_.principal)
+      holding <- grants.grantedAt(kind, ids, least)
+      held = holding.map(_.principal)
       people <- usernames(held.collect { case Principal.Person(id) => id })
       named  <- namesAt(held.collect { case Principal.Group(id) => id })
-    yield owning
+    yield holding
       .groupMap(_.resource.id)(grant =>
-        Holder(
-          grant.principal,
-          grant.principal match
-            case Principal.Person(id) => people.get(id)
-            case Principal.Group(id)  => named.get(id)
-            case Principal.System     => None,
+        Manager(
+          Holder(
+            grant.principal,
+            grant.principal match
+              case Principal.Person(id) => people.get(id)
+              case Principal.Group(id)  => named.get(id)
+              case Principal.System     => None,
+          ),
+          grant.access,
         ),
       )
       .view
-      .mapValues(_.distinct.sortBy(GroupStore.holderOrder))
+      .mapValues(
+        _.distinct
+          .sortBy(manager =>
+            (-manager.access.ordinal, GroupStore.holderOrder(manager.holder)),
+          ),
+      )
       .toMap
 
   private def usernames(users: Seq[Long]): DBIO[Map[Long, String]] = ifAny(
@@ -297,27 +325,37 @@ final class GroupStore
     *   sent it.
     */
   def invitations(user: Long): IO[List[Invitation]] = db
-    .run(
-      tables
-        .invitations
-        .filter(_.userId === user)
-        .join(tables.groups)
-        .on(_.groupId === _.id)
-        .joinLeft(tables.users)
-        .on(_._1.inviterId === _.id)
-        .sortBy(_._1._1.id)
-        .result,
-    )
-    .map(
-      _.map { case ((invitation, group), inviter) =>
-          Invitation(
-            invitation.id,
-            Group(group.id, group.name),
-            inviter.map(_.toUser),
-          )
-        }
-        .toList,
-    )
+    .run(invitationsOf(Seq(user)))
+    .map(_.getOrElse(user, List.empty))
+
+  /**
+    * The pending invitations sent to each of some users, in order of sending;
+    * users with none are absent. In the caller's transaction.
+    */
+  private[server] def invitationsOf
+    (users: Seq[Long])
+    : DBIO[Map[Long, List[Invitation]]] = ifAny(users.distinct)(
+    Map.empty[Long, List[Invitation]],
+  ): invitees =>
+    tables
+      .invitations
+      .filter(_.userId inSet invitees)
+      .join(tables.groups)
+      .on(_.groupId === _.id)
+      .joinLeft(tables.users)
+      .on(_._1.inviterId === _.id)
+      .sortBy(_._1._1.id)
+      .result
+      .map(
+        _.toList
+          .groupMap(_._1._1.userId) { case ((invitation, group), inviter) =>
+            Invitation(
+              invitation.id,
+              Group(group.id, group.name),
+              inviter.map(_.toUser),
+            )
+          },
+      )
 
   /**
     * Lists the groups a user may ask to join: every public group and every
@@ -687,9 +725,9 @@ final class GroupStore
 
   /**
     * Invites a user to a group. Inviting a member or invitee changes nothing;
-    * inviting an applicant admits them, and inviting oneself joins. An unknown
-    * username is refused as such, so callers can tell which names were
-    * mistyped.
+    * inviting an applicant admits them, and inviting oneself, or anyone whose
+    * account one may change, joins. An unknown username is refused as such, so
+    * callers can tell which names were mistyped.
     *
     * @param user
     *   The identifier of a user who may change the group.
@@ -719,47 +757,78 @@ final class GroupStore
       yield Offer(invitee.toUser, sent)
 
   /**
-    * Accepts an invitation, making its invitee a member of the group.
+    * Accepts an invitation, making its invitee a member of the group. Anyone
+    * who may change the invitee's account ([[Access.Edit]] over
+    * [[Resource.user]]) may accept for them; to anyone else, an invitation sent
+    * to somebody else is missing.
     *
     * @param user
-    *   The identifier of the invitee.
+    *   The identifier of the invitee, or of someone who may change their
+    *   account.
     *
     * @param invitation
     *   The identifier of the invitation.
     */
   def accept(user: Long, invitation: Long): IO[Unit] = db.run((for
-    found <- invitationOf(user, invitation).result.headOption
-    row   <- required(found, AuthRefusal.InvitationMissing)
-    _     <- lock(Seq(row.groupId))
+    row <- answerableAt(user, invitation)
+    _   <- lock(Seq(row.groupId))
     // Deleted under the lock, which both rechecks and claims the invitation.
-    taken <- invitationOf(user, invitation).delete
+    taken <- invitationOf(row.userId, invitation).delete
     _     <- refuseUnless(
       taken == 1,
       AuthRefusal.InvitationMissing,
     )
-    _ <- enrol(row.groupId, user)
+    _ <- enrol(row.groupId, row.userId)
   yield ()).transactionally)
 
   /**
-    * Declines an invitation, deleting it. A single statement, so a racing
-    * acceptance finds nothing.
+    * Declines an invitation, deleting it. Whoever may accept it may decline it.
+    * The deletion is a single statement, so a racing acceptance finds nothing.
     *
     * @param user
-    *   The identifier of the invitee.
+    *   The identifier of the invitee, or of someone who may change their
+    *   account.
     *
     * @param invitation
     *   The identifier of the invitation.
     */
-  def decline(user: Long, invitation: Long): IO[Unit] = db.run(
-    invitationOf(user, invitation)
-      .delete
-      .flatMap(removed =>
-        refuseUnless(
-          removed == 1,
-          AuthRefusal.InvitationMissing,
+  def decline(user: Long, invitation: Long): IO[Unit] = db.run((for
+    row     <- answerableAt(user, invitation)
+    removed <- invitationOf(row.userId, invitation).delete
+    _       <- refuseUnless(
+      removed == 1,
+      AuthRefusal.InvitationMissing,
+    )
+  yield ()).transactionally)
+
+  /**
+    * The invitation, if the user may answer it: as its invitee, or as someone
+    * who may change the invitee's account. Missing otherwise.
+    */
+  private def answerableAt(user: Long, invitation: Long): DBIO[InvitationRow] =
+    tables
+      .invitations
+      .filter(_.id === invitation)
+      .result
+      .headOption
+      .flatMap(required(_, AuthRefusal.InvitationMissing))
+      .flatMap(row =>
+        consentsFor(user, row.userId).flatMap(may =>
+          if may then DBIO.successful(row)
+          else DBIO.failed(AuthProblem(AuthRefusal.InvitationMissing)),
         ),
-      ),
-  )
+      )
+
+  /**
+    * Whether a user may agree for another to join a group: as that person, or
+    * as someone who may change their account.
+    */
+  private def consentsFor(user: Long, person: Long): DBIO[Boolean] =
+    if user == person then DBIO.successful(true)
+    else
+      permissions
+        .accessAt(user, Resource.user(person))
+        .map(_.exists(_.includes(Access.Edit)))
 
   /**
     * Takes a user out of a group, doing nothing if they are not a member.
@@ -973,6 +1042,9 @@ final class GroupStore
           around.enclosing,
         ),
       )
+    else if resource.kind == Resource.userKind then
+      db.run(permissions.holding(resource))
+        .map(managers => Affected.Accounts(managers ++ formerly + resource.id))
     else IO.pure(Affected.Grants(resource, formerly))
 
   /**
@@ -988,8 +1060,28 @@ final class GroupStore
           tables.groups.filter(_.parentId inSet gone).map(_.id).result
       yield (doomed ++ moved).distinct
 
-  private[server] def invitedTo(user: Long, invitation: Long): IO[Seq[Long]] =
-    db.run(invitationOf(user, invitation).map(_.groupId).result)
+  /**
+    * The group an invitation is to and its invitee, if the user may answer it
+    * (see [[accept]]), or `None`.
+    */
+  private[server] def answerable
+    (user: Long, invitation: Long)
+    : IO[Option[(Long, Long)]] = db
+    .run(answerableAt(user, invitation).asTry)
+    .map(_.toOption.map(row => (row.groupId, row.userId)))
+
+  /**
+    * Whom a change to who is in, invited to or asking to join some groups
+    * concerns: the groups' managers and members, that person, and whoever
+    * manages the person's account, who sees what awaits it.
+    */
+  private[server] def membersChanged
+    (groups: Seq[Long], person: Long)
+    : IO[Affected] =
+    for
+      around   <- surroundings(groups)
+      managers <- db.run(permissions.holding(Resource.user(person)))
+    yield around.membersChanged(person, managers)
 
   /**
     * Removes a member, invitee or applicant from a group.
@@ -1049,11 +1141,17 @@ final class GroupStore
                   _ =>
                     for
                       formerly <- permissions.holding(resource)
-                      _        <- grants.grant(Grant(
-                        resource,
-                        Principal.Person(user),
-                        Access.Own,
-                      ))
+                      // Nobody holds a grant over their own account, which is
+                      // theirs alone again.
+                      _ <-
+                        if Permissions.ownAccount(user, resource) then
+                          release(user)
+                        else
+                          grants.grant(Grant(
+                            resource,
+                            Principal.Person(user),
+                            Access.Own,
+                          ))
                     yield Some(resource -> formerly),
                 ),
               ),
@@ -1061,6 +1159,15 @@ final class GroupStore
         )
         .map(_.flatten),
     )
+
+  /**
+    * Makes an account its user's alone again: every grant over it withdrawn,
+    * and any suspension lifted. Callers must hold the user's row locked.
+    */
+  private[server] def release(user: Long): DBIO[Unit] = DBIO.seq(
+    grants.revokeOver(Resource.user(user)),
+    tables.suspensions.filter(_.userId === user).delete,
+  )
 
   /**
     * Deletes groups the caller already holds locked, and all that goes with
@@ -1164,36 +1271,50 @@ final class GroupStore
     *   An effect producing whether the user may address the principal.
     */
   def mayAddress(user: Long, principal: Principal): IO[Boolean] =
-    principal match
-      case Principal.Person(id) if id == user => IO.pure(true)
-      case Principal.Person(id)               => db.run(
-          for
-            principals <- principalsAt(user)
-            groups     <- grants.accessibleAt(
-              principals,
-              Resource.groupKind,
-              Access.Edit,
-            )
-            found <- tables
-              .members
-              .filter(row => row.userId === id && (row.groupId inSet groups))
-              .exists
-              .result
-          yield found,
+    db.run(mayAddressAt(user, principal))
+
+  /** As [[mayAddress]], in the caller's transaction. */
+  private[server] def mayAddressAt
+    (user: Long, principal: Principal)
+    : DBIO[Boolean] = principal match
+    case Principal.Person(id) if id == user => DBIO.successful(true)
+    case Principal.Person(id)               =>
+      for
+        principals <- principalsAt(user)
+        groups     <- grants.accessibleAt(
+          principals,
+          Resource.groupKind,
+          Access.Edit,
         )
-      case Principal.Group(id) => db.run(
-          tables
-            .groups
-            .filter(_.id === id)
-            .exists
-            .result
-            .flatMap(found =>
-              if found then
-                levelAt(user, id).map(_.exists(_.includes(Access.Edit)))
-              else DBIO.successful(false),
-            ),
+        found <- tables
+          .members
+          .filter(row => row.userId === id && (row.groupId inSet groups))
+          .exists
+          .result
+      yield found
+    case Principal.Group(id) => tables
+        .groups
+        .filter(_.id === id)
+        .exists
+        .result
+        .flatMap(found =>
+          if found then levelAt(user, id).map(_.exists(_.includes(Access.Edit)))
+          else DBIO.successful(false),
         )
-      case Principal.System => db.run(actsForSystem(user))
+    case Principal.System => actsForSystem(user)
+
+  /**
+    * Enrols people in a group the user may change, in the caller's transaction,
+    * locking the group first; a group they may not change is missing.
+    */
+  private[server] def enrolAll
+    (user: Long, group: Long, people: Seq[Long])
+    : DBIO[Unit] =
+    for
+      held <- lock(Seq(group))
+      _    <- ensureLevel(held, user, group, Access.Edit)
+      _    <- DBIO.seq(people.map(enrol(group, _))*)
+    yield ()
 
   private def membershipsOf(user: Long) = tables
     .members
@@ -1283,14 +1404,15 @@ final class GroupStore
     )
 
   /**
-    * Invites a user unless they are a member or invitee, or enrols them if they
-    * are the inviter or an applicant, yielding the invitation sent, if any.
-    * Callers must hold the group's lock.
+    * Invites a user unless they are a member or invitee, or enrols them if the
+    * inviter may agree for them (as themselves, or as someone who may change
+    * their account) or they asked to join, yielding the invitation sent, if
+    * any. Callers must hold the group's lock.
     */
   private def offer
     (inviter: Long, group: Long, user: Long)
-    : DBIO[Option[Long]] =
-    if user == inviter then enrol(group, user).map(_ => None)
+    : DBIO[Option[Long]] = consentsFor(inviter, user).flatMap(agreed =>
+    if agreed then enrol(group, user).map(_ => None)
     else
       memberOf(group, user)
         .exists
@@ -1302,7 +1424,8 @@ final class GroupStore
             (tables.invitations.returning(tables.invitations.map(_.id)) +=
               InvitationRow(0, group, user, inviter)).map(Some(_))
           case ((false, _), true) => enrol(group, user).map(_ => None)
-          case _                  => DBIO.successful(None)
+          case _                  => DBIO.successful(None),
+  )
 
   /**
     * Records a request to join a group the user can see, unless they are a
@@ -1410,11 +1533,15 @@ object GroupStore:
       enclosing: Set[Long],
     ):
 
-    /** Whom a change to the groups' members concerns. */
-    def membersChanged(person: Long): Affected = Affected.Groups(
-      Audience.People(managers ++ members + person),
-      enclosing,
-    )
+    /**
+      * Whom a change to the groups' members concerns, given whoever manages the
+      * person's account.
+      */
+    def membersChanged(person: Long, accountManagers: Set[Long]): Affected =
+      Affected.Groups(
+        Audience.People(managers ++ members ++ accountManagers + person),
+        enclosing,
+      )
 
   private def byGroup(pairs: Seq[(Long, UserRow)]): Map[Long, List[User]] =
     pairs

@@ -326,7 +326,8 @@ final class GroupService
     failures.attempt(groups.invitations(user.id))
 
   /**
-    * Accepts one of a user's invitations, joining its group.
+    * Accepts one of a user's invitations, joining its group, or one sent to
+    * someone whose account they may change, for them.
     *
     * @param user
     *   The signed-in user.
@@ -338,7 +339,8 @@ final class GroupService
     answering(user, invitation)(groups.accept)
 
   /**
-    * Declines one of a user's invitations, deleting it.
+    * Declines one of a user's invitations, deleting it, or one sent to someone
+    * whose account they may change, for them.
     *
     * @param user
     *   The signed-in user.
@@ -359,7 +361,7 @@ final class GroupService
     : IO[X] = change.flatTap(_ => tell(membersChanged(changed, person)))
 
   private def membersChanged(changed: Seq[Long], person: Long): IO[Affected] =
-    groups.surroundings(changed).map(_.membersChanged(person))
+    groups.membersChanged(changed, person)
 
   /**
     * Runs a change to groups' names, nesting, visibility or existence, then
@@ -401,13 +403,20 @@ final class GroupService
     changingMembers(Seq(group), user.id)(change(user.id, group)),
   )
 
+  /**
+    * Answers an invitation the user may answer, for themselves or for someone
+    * whose account they may change, then tells whom it concerns.
+    */
   private def answering
     (user: User, invitation: Long)
     (answer: (Long, Long) => IO[Unit])
     : Answer[Unit] = failures.attempt(
     groups
-      .invitedTo(user.id, invitation)
-      .flatMap(changingMembers(_, user.id)(answer(user.id, invitation))),
+      .answerable(user.id, invitation)
+      .flatMap:
+        case Some((group, invitee)) =>
+          changingMembers(Seq(group), invitee)(answer(user.id, invitation))
+        case None => answer(user.id, invitation),
   )
 
   private def named[X](name: String)(change: => IO[X]): Answer[X] = failures

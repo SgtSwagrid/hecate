@@ -57,13 +57,45 @@ final class AccountStore
     * @param user
     *   The identifier of the user to delete.
     */
-  def delete(user: Long): IO[Unit] = db.run((for
-    _      <- tables.lockUser(user)
-    doomed <- groups.soleGroupsOf(user)
-    _      <- cascade(Seq(Principal.Person(user)))
-    _ <- refuseOrphans(Principal.Person(user) +: doomed.map(Principal.Group(_)))
-    _ <- forget(user, doomed)
-  yield ()).transactionally)
+  def delete(user: Long): IO[Unit] =
+    db.run(deleting(user)(DBIO.unit).transactionally)
+
+  /**
+    * Deletes an account at its own user's request, as [[delete]] does, unless
+    * anyone manages it (holds a grant over [[Resource.user]]): deleting a
+    * managed account is its managers' alone, and is refused as
+    * [[AuthRefusal.AccountManaged]].
+    *
+    * @param user
+    *   The identifier of the user to delete.
+    */
+  def deleteOwn(user: Long): IO[Unit] = db.run(
+    deleting(user)(
+      grants
+        .granted(Resource.user(user))
+        .flatMap(held =>
+          refuseUnless(
+            held.isEmpty,
+            AuthRefusal.AccountManaged,
+          ),
+        ),
+    ).transactionally,
+  )
+
+  /**
+    * Deletes an account once a check passes under its user's row lock, which
+    * guards the grants over the account too, in the caller's transaction.
+    */
+  private[server] def deleting(user: Long)(check: DBIO[Unit]): DBIO[Unit] =
+    for
+      _      <- tables.lockUser(user)
+      _      <- check
+      doomed <- groups.soleGroupsOf(user)
+      _      <- cascade(Seq(Principal.Person(user)))
+      _      <-
+        refuseOrphans(Principal.Person(user) +: doomed.map(Principal.Group(_)))
+      _ <- forget(user, doomed)
+    yield ()
 
   private def refuseOrphans(doomed: Seq[Principal]): DBIO[Unit] = grants
     .ownedSolelyBy(doomed)
@@ -79,5 +111,6 @@ final class AccountStore
     for
       _ <- groups.forget(user, doomed)
       _ <- grants.revokeHeldBy(Seq(Principal.Person(user)))
+      _ <- grants.revokeOver(Resource.user(user))
       _ <- users.delete(user)
     yield ()

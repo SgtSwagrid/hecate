@@ -163,5 +163,41 @@ enum AuthRefusal:
   /** A user asked for an email too soon after the last one sent to them. */
   case MailedRecently
 
+  /**
+    * Someone tried to sign in to, or regain, an account its managers have
+    * suspended. Said only once the password, code or link given is right.
+    */
+  case Suspended
+
+  /**
+    * A user asked to do to their own account what only its managers may, such
+    * as deleting it.
+    */
+  case AccountManaged
+
+  /**
+    * Someone asked to manage their own account, or to grant a user access over
+    * their own account: their powers over it come from being signed in as it,
+    * never from a grant.
+    */
+  case ManagingSelf
+
+  /**
+    * Accounts to be created named usernames that are taken, or named one
+    * username twice, whatever its letter case.
+    *
+    * @param usernames
+    *   The usernames taken or repeated, as given.
+    */
+  case UsernamesTaken(usernames: List[String])
+
+  /**
+    * More accounts were to be created at once than the library allows.
+    *
+    * @param max
+    *   The most accounts one request may create.
+    */
+  case TooManyAccounts(max: Int)
+
   /** A request failed for an internal reason, whose detail stays on the server. */
   case Failed

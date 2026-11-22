@@ -280,6 +280,21 @@ final class AuthTables
 
     override def * = (id, userId, purpose, address, sentAt).mapTo[SentMailRow]
 
+  /**
+    * A table of suspended accounts, with the columns of [[SuspensionRow]]: one
+    * row for each, which nobody may sign in to while it stands.
+    */
+  final class Suspensions
+    (tag: Tag)
+    extends Table[SuspensionRow](tag, s"${ prefix }suspensions"):
+
+    def userId = column[Long]("user_id", O.PrimaryKey)
+
+    override def * = userId.<>(
+      SuspensionRow.apply,
+      row => Some(row.userId),
+    )
+
   /** The table of users. */
   val users = TableQuery[Users]
 
@@ -312,6 +327,9 @@ final class AuthTables
 
   /** The table of mails sent with links. */
   val sentMails = TableQuery[SentMails]
+
+  /** The table of suspended accounts. */
+  val suspensions = TableQuery[Suspensions]
 
   private val lockable = profile
     .capabilities
@@ -375,6 +393,7 @@ final class AuthTables
     recoveryCodes,
     emailLinks,
     sentMails,
+    suspensions,
   )
 
 /**
@@ -663,6 +682,15 @@ final case class SentMailRow
     address: String,
     sentAt: Long,
   )
+
+/**
+  * A stored suspension of an account, deleted when it is lifted, released or
+  * deleted.
+  *
+  * @param userId
+  *   The identifier of the suspended account's user.
+  */
+final case class SuspensionRow(userId: Long)
 
 /**
   * A kind of link sent by email.

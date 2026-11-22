@@ -13,10 +13,12 @@ import slick.dbio.DBIO
   * A service that lets a resource's owners see and change who holds it, and
   * manage its invite link. A resource is never left with nobody holding
   * [[Access.Own]], no link grants [[Access.Own]], and only a principal the
-  * owner may address ([[GroupStore.mayAddress]]) is granted anything. Every
-  * change locks the resource's row first, through `resources`, so that two
-  * owners giving up ownership at once cannot each see the other still holding
-  * it.
+  * owner may address ([[GroupStore.mayAddress]]) is granted anything. Nobody is
+  * granted anything over their own account ([[Resource.user]]), and an account
+  * has no invite link, as following one would let anyone manage it: making one
+  * is refused as if the account were missing. Every change locks the resource's
+  * row first, through `resources`, so that two owners giving up ownership at
+  * once cannot each see the other still holding it.
   *
   * @param grants
   *   The store of grants.
@@ -104,14 +106,19 @@ final class SharingService
       principal: Principal,
       level: Access,
     )
-    : Answer[Unit] = owning(user, resource)(
+    : Answer[Unit] = checked(
+    Option.when(
+      principal == Principal.Person(resource.id) &&
+      resource.kind == Resource.userKind,
+    )(AuthRefusal.ManagingSelf),
+  )(owning(user, resource)(
     groups
       .mayAddress(user.id, principal)
       .flatMap(addressable =>
         if addressable then change(resource, principal, Some(level))
         else IO.raiseError(AuthProblem(AuthRefusal.PrincipalMissing)),
       ),
-  )
+  ))
 
   /**
     * Withdraws a principal's access over a resource the user owns. It asks
@@ -176,6 +183,7 @@ final class SharingService
       level: Access,
     )
     : Answer[InviteLink] = checked(
+    SharingService.unlinkable(resource),
     Option.when(level == Access.Own)(AuthRefusal.OwnershipByLink),
   )(owning(user, resource)(relinking(resource)(
     links
@@ -199,10 +207,9 @@ final class SharingService
     * @return
     *   An answer with the new link, or a refusal.
     */
-  def relink(user: User, resource: Resource): Answer[InviteLink] = owning(
-    user,
-    resource,
-  )(relinking(resource)(
+  def relink(user: User, resource: Resource): Answer[InviteLink] = checked(
+    SharingService.unlinkable(resource),
+  )(owning(user, resource)(relinking(resource)(
     links
       .over(resource)
       .map(_.fold(Access.View)(_.access))
@@ -214,7 +221,7 @@ final class SharingService
           )
           .map(InviteLink(_, level)),
       ),
-  ))
+  )))
 
   /**
     * Turns off the invite link of a resource the user owns.
@@ -298,6 +305,11 @@ final class SharingService
     .handleErrorWith(report)
 
 object SharingService:
+
+  /** The refusal of an invite link to a kind of resource that has none. */
+  private def unlinkable(resource: Resource): Option[AuthRefusal] = Option.when(
+    resource.kind == Resource.userKind,
+  )(AuthRefusal.ResourceMissing(resource.kind))
 
   /** Whether the change lowers or withdraws what the principal held. */
   private[server] def takes

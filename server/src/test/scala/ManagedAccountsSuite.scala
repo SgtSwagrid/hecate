@@ -1,0 +1,569 @@
+package com.alecdorrington.hecate
+package server
+
+import Fixtures.{cheap, enrol}
+import cats.effect.{IO, Ref}
+import com.alecdorrington.hecate.model.{
+  Access, AccountCreation, AuthRefusal, CreatedAccount, Credentials,
+  GroupDetails, Holder, Manager, NewAccount, PasswordChange, PasswordSetting,
+  Principal, Recovery, Resource, User, UsernameChange,
+}
+import munit.CatsEffectSuite
+import slick.dbio.DBIO
+
+/**
+  * Tests of accounts managed by others: created in bulk, then renamed, given
+  * passwords, suspended, released and deleted by whoever holds a grant over
+  * them, while their own users keep their passwords and never manage their own
+  * accounts through a grant.
+  */
+class ManagedAccountsSuite extends CatsEffectSuite:
+
+  import ManagedAccountsSuite.*
+
+  test("created accounts join the group at once, owned by their creator"):
+    served("create"): world =>
+      import world.*
+      for
+        teacher <- signUp("teacher")
+        team    <- groups.create(teacher.id, GroupDetails("Class"))
+        made    <- service.create(
+          teacher,
+          AccountCreation(
+            List(
+              NewAccount("Ada"),
+              NewAccount("Ben", Some("chosen-secret")),
+            ),
+            Some(team.id),
+          ),
+        )
+        created = made.toOption.get
+        listed <- service.list(teacher)
+        inside <- groups.managed(teacher.id)
+        signed <- created.traverseSignIn(auth)
+        told   <- reported
+      yield
+        assertEquals(
+          created.map(_.user.username),
+          List("Ada", "Ben"),
+        )
+        assertEquals(created(1).password, "chosen-secret")
+        // A generated password has room to spare over the policy's minimum.
+        assert(created(0).password.length >= cheap.minPasswordLength)
+        assertEquals(
+          listed.map(_.map(account => (account.user, account.access))),
+          Right(created.map(_.user -> Access.Own)),
+        )
+        assertEquals(
+          listed.map(_.flatMap(_.managers)),
+          Right(List.fill(2)(Manager(
+            Holder(
+              Principal.Person(teacher.id),
+              Some("teacher"),
+            ),
+            Access.Own,
+          ))),
+        )
+        assertEquals(
+          inside.flatMap(_.members).map(_.username).toSet,
+          Set("Ada", "Ben"),
+        )
+        assertEquals(signed, List(true, true))
+        assert(told.contains(
+          Affected.Accounts(Set(teacher.id) ++ created.map(_.user.id)),
+        ))
+
+  test("creation refuses taken and repeated names, and groups not changeable"):
+    served("refusals"): world =>
+      import world.*
+      for
+        teacher  <- signUp("teacher")
+        stranger <- signUp("stranger")
+        theirs   <- groups.create(stranger.id, GroupDetails("Theirs"))
+        taken    <- service.create(
+          teacher,
+          AccountCreation(List(
+            NewAccount("STRANGER"),
+            NewAccount("Cy"),
+          )),
+        )
+        repeated <- service.create(
+          teacher,
+          AccountCreation(List(NewAccount("Dee"), NewAccount("dee "))),
+        )
+        tooMany <- service.create(
+          teacher,
+          AccountCreation(List.tabulate(201)(n => NewAccount(s"n$n"))),
+        )
+        grouped <- service.create(
+          teacher,
+          AccountCreation(
+            List(NewAccount("Eve")),
+            Some(theirs.id),
+          ),
+        )
+        owned <- service.create(
+          teacher,
+          AccountCreation(
+            List(NewAccount("Fay")),
+            owner = Some(Principal.Person(stranger.id)),
+          ),
+        )
+        short <- service.create(
+          teacher,
+          AccountCreation(List(NewAccount("Gus", Some("short")))),
+        )
+        none <- service.list(teacher)
+      yield
+        assertEquals(
+          taken,
+          Left(AuthRefusal.UsernamesTaken(List("STRANGER"))),
+        )
+        assertEquals(
+          repeated,
+          Left(AuthRefusal.UsernamesTaken(List("Dee"))),
+        )
+        assertEquals(
+          tooMany,
+          Left(AuthRefusal.TooManyAccounts(200)),
+        )
+        assertEquals(
+          grouped,
+          Left(AuthRefusal.GroupMissing),
+        )
+        assertEquals(
+          owned,
+          Left(AuthRefusal.PrincipalMissing),
+        )
+        assertEquals(
+          short,
+          Left(AuthRefusal.PasswordTooShort(8)),
+        )
+        // Nothing was created by any of them.
+        assertEquals(none, Right(List.empty))
+
+  test("an editor renames and sets passwords; a viewer or stranger cannot"):
+    served("edit"): world =>
+      import world.*
+      for
+        teacher  <- signUp("teacher")
+        helper   <- signUp("helper")
+        stranger <- signUp("stranger")
+        made     <- service.create(
+          teacher,
+          AccountCreation(List(NewAccount("Ada"))),
+        )
+        ada = made.toOption.get.head.user
+        _ <- grant(
+          Resource.user(ada.id),
+          helper,
+          Access.View,
+        )
+        session <- signIn(
+          auth,
+          "Ada",
+          made.toOption.get.head.password,
+        )
+        viewed <- service.rename(helper, ada.id, UsernameChange("Nope"))
+        hidden <- service.rename(
+          stranger,
+          ada.id,
+          UsernameChange("Nope"),
+        )
+        clash <- service.rename(
+          teacher,
+          ada.id,
+          UsernameChange("HELPER"),
+        )
+        renamed <- service.rename(
+          teacher,
+          ada.id,
+          UsernameChange("Ada L"),
+        )
+        _   <- reported
+        set <- service.setPassword(
+          teacher,
+          ada.id,
+          PasswordSetting("new-secret"),
+        )
+        told  <- reported
+        ended <- auth.current(Some(session.get))
+        again <- signIn(auth, "ada l", "new-secret")
+      yield
+        assertEquals(
+          viewed,
+          Left(AuthRefusal.ResourceMissing("user")),
+        )
+        assertEquals(
+          hidden,
+          Left(AuthRefusal.ResourceMissing("user")),
+        )
+        assertEquals(clash, Left(AuthRefusal.UsernameTaken))
+        assertEquals(renamed, Right(User(ada.id, "Ada L")))
+        assertEquals(set, Right(()))
+        // The person is told who set it, and every session of theirs ends.
+        assert(told.contains(Affected.PasswordSet(ada.id, teacher.id)))
+        assertEquals(ended, Right(None))
+        assert(again.isDefined)
+
+  test("a suspended account cannot be signed in to, by password or code"):
+    served("suspend"): world =>
+      import world.*
+      for
+        teacher <- signUp("teacher")
+        made    <- service.create(
+          teacher,
+          AccountCreation(List(NewAccount("Ada", Some("ada-secret")))),
+        )
+        ada = made.toOption.get.head.user
+        session <- signIn(auth, "Ada", "ada-secret")
+        codes   <- auth.generateRecoveryCodes(ada, "ada-secret")
+        _       <- service.suspend(teacher, ada.id, true)
+        ended   <- auth.current(Some(session.get))
+        right   <- auth.signIn(Credentials("Ada", "ada-secret"))
+        wrong   <- auth.signIn(Credentials("Ada", "not-it-at-all"))
+        regain  <- auth.recover(Recovery(
+          "Ada",
+          codes.toOption.get.codes.head,
+          "another-secret",
+        ))
+        listed <- service.list(teacher)
+        _      <- service.suspend(teacher, ada.id, false)
+        back   <- signIn(auth, "Ada", "ada-secret")
+        left   <- auth.recoveryCodesLeft(ada)
+      yield
+        assertEquals(ended, Right(None))
+        assertEquals(
+          right.map(_._1),
+          Left(AuthRefusal.Suspended),
+        )
+        // Suspension is told only to someone who knows the password.
+        assertEquals(
+          wrong.map(_._1),
+          Left(AuthRefusal.CredentialsIncorrect),
+        )
+        assertEquals(
+          regain.map(_._1),
+          Left(AuthRefusal.Suspended),
+        )
+        assertEquals(
+          listed.map(_.map(_.suspended)),
+          Right(List(true)),
+        )
+        assert(back.isDefined)
+        // The refused recovery used up no code.
+        assertEquals(left, Right(10))
+
+  test("a manager answers invitations for the account, and invites it in"):
+    served("invitations"): world =>
+      import world.*
+      for
+        teacher  <- signUp("teacher")
+        other    <- signUp("other")
+        stranger <- signUp("stranger")
+        made     <- service.create(
+          teacher,
+          AccountCreation(List(NewAccount("Ada"))),
+        )
+        ada = made.toOption.get.head.user
+        club   <- groups.create(other.id, GroupDetails("Club"))
+        mine   <- groups.create(teacher.id, GroupDetails("Mine"))
+        _      <- groups.invite(other.id, club.id, "Ada")
+        listed <- service.list(teacher)
+        waiting = listed.toOption.get.head.invitations
+        refused <- groupService.accept(stranger, waiting.head.id)
+        _       <- reported
+        taken   <- groupService.accept(teacher, waiting.head.id)
+        told    <- reported
+        // Inviting an account one may change into a group one may change joins.
+        _       <- groups.invite(teacher.id, mine.id, "Ada")
+        joined  <- groups.memberships(ada.id)
+        pending <- groups.invitations(ada.id)
+      yield
+        assertEquals(
+          waiting.map(_.group.name),
+          List("Club"),
+        )
+        assertEquals(
+          refused,
+          Left(AuthRefusal.InvitationMissing),
+        )
+        assertEquals(taken, Right(()))
+        // Whoever manages the account sees what awaits it, so is told too.
+        assert(told.exists(tells(teacher, ada)))
+        assertEquals(
+          joined.map(_.group.name).toSet,
+          Set("Club", "Mine"),
+        )
+        assertEquals(pending, List.empty)
+
+  test("the person keeps their password, but deletion is the managers'"):
+    served("own"): world =>
+      import world.*
+      for
+        teacher <- signUp("teacher")
+        helper  <- signUp("helper")
+        made    <- service.create(
+          teacher,
+          AccountCreation(List(NewAccount("Ada", Some("ada-secret")))),
+        )
+        ada = made.toOption.get.head.user
+        _ <- grant(
+          Resource.user(ada.id),
+          helper,
+          Access.Edit,
+        )
+        changed <- auth.changePassword(
+          ada,
+          PasswordChange("ada-secret", "ada-secret-2"),
+        )
+        selfDelete <- auth.deleteAccount(ada, "ada-secret-2")
+        managers   <- service.managers(ada)
+        editDelete <- service.delete(helper, ada.id)
+        released   <- service.release(teacher, ada.id)
+        after      <- service.managers(ada)
+        free       <- auth.deleteAccount(ada, "ada-secret-2")
+      yield
+        assert(changed.isRight)
+        assertEquals(
+          selfDelete.map(_ => ()),
+          Left(AuthRefusal.AccountManaged),
+        )
+        assertEquals(
+          managers.map(
+            _.map(manager => (manager.holder.principal, manager.access)),
+          ),
+          Right(List(
+            Principal.Person(teacher.id) -> Access.Own,
+            Principal.Person(helper.id)  -> Access.Edit,
+          )),
+        )
+        assertEquals(
+          editDelete,
+          Left(AuthRefusal.ResourceMissing("user")),
+        )
+        assertEquals(released, Right(()))
+        assertEquals(after, Right(List.empty))
+        assert(free.isRight)
+
+  test("an owner deletes an account, which takes its grants with it"):
+    served("delete"): world =>
+      import world.*
+      for
+        teacher <- signUp("teacher")
+        made    <- service.create(
+          teacher,
+          AccountCreation(List(NewAccount("Ada"))),
+        )
+        ada = made.toOption.get.head.user
+        deleted <- service.delete(teacher, ada.id)
+        gone    <- users.find(ada.id)
+        listed  <- service.list(teacher)
+        held    <- grants.over(Resource.user(ada.id))
+      yield
+        assertEquals(deleted, Right(()))
+        assertEquals(gone, None)
+        assertEquals(listed, Right(List.empty))
+        assertEquals(held, List.empty)
+
+  test("nobody manages their own account, even through a group"):
+    served("self"): world =>
+      import world.*
+      for
+        teacher <- signUp("teacher")
+        member  <- signUp("member")
+        staff   <- groups.create(teacher.id, GroupDetails("Staff"))
+        _       <- enrol(groups, teacher, staff.id, member)
+        _       <- groups.join(teacher.id, staff.id)
+        _       <- grant(
+          Resource.user(member.id),
+          Principal.Group(staff.id),
+          Access.Own,
+        )
+        own      <- permissions.access(member.id, Resource.user(member.id))
+        theirs   <- permissions.access(teacher.id, Resource.user(member.id))
+        listed   <- service.list(member)
+        selfEdit <- service.suspend(member, member.id, true)
+        selfMade <- sharing.grant(
+          teacher,
+          Resource.user(teacher.id),
+          Principal.Person(teacher.id),
+          Access.Own,
+        )
+        linked <- sharing.setLink(
+          member,
+          Resource.user(teacher.id),
+          Access.View,
+        )
+      yield
+        assertEquals(own, None)
+        assertEquals(theirs, Some(Access.Own))
+        assertEquals(listed, Right(List.empty))
+        assertEquals(
+          selfEdit,
+          Left(AuthRefusal.ManagingSelf),
+        )
+        assertEquals(
+          selfMade,
+          Left(AuthRefusal.ManagingSelf),
+        )
+        assertEquals(
+          linked.map(_ => ()),
+          Left(AuthRefusal.ResourceMissing("user")),
+        )
+
+  test("an owner hands an account to someone else through sharing"):
+    served("transfer"): world =>
+      import world.*
+      for
+        teacher   <- signUp("teacher")
+        colleague <- signUp("colleague")
+        staff     <- groups.create(teacher.id, GroupDetails("Staff"))
+        _         <- enrol(groups, teacher, staff.id, colleague)
+        made      <- service.create(
+          teacher,
+          AccountCreation(List(NewAccount("Ada"))),
+        )
+        ada     = made.toOption.get.head.user
+        account = Resource.user(ada.id)
+        _ <- sharing.grant(
+          teacher,
+          account,
+          Principal.Person(colleague.id),
+          Access.Own,
+        )
+        _ <- reported
+        _ <- sharing.revoke(
+          teacher,
+          account,
+          Principal.Person(teacher.id),
+        )
+        told <- reported
+        hers <- service.list(colleague)
+        his  <- service.list(teacher)
+      yield
+        assertEquals(
+          hers.map(_.map(_.user)),
+          Right(List(ada)),
+        )
+        assertEquals(his, Right(List.empty))
+        assert(told.contains(
+          Affected.Accounts(Set(colleague.id, teacher.id, ada.id)),
+        ))
+
+object ManagedAccountsSuite:
+
+  /** Whether a change to groups is told to both people. */
+  private def tells(one: User, other: User)(change: Affected): Boolean =
+    change match
+      case Affected.Groups(Audience.People(people), _) => people(one.id) &&
+        people(other.id)
+      case _ => false
+
+  extension (created: List[CreatedAccount])
+
+    /** Whether each account signs in with its password. */
+    private def traverseSignIn(auth: AuthService): IO[List[Boolean]] =
+      import cats.syntax.all.*
+      created.traverse(account =>
+        signIn(
+          auth,
+          account.user.username,
+          account.password,
+        ).map(_.isDefined),
+      )
+
+  /** The session token signing in opens, or `None` if refused. */
+  private def signIn
+    (
+      auth: AuthService,
+      username: String,
+      password: String,
+    )
+    : IO[Option[String]] = auth
+    .signIn(Credentials(username, password))
+    .map(_.toOption.map(_._2.token))
+
+  /** The services under test over one fresh database, with what they told. */
+  private final class World
+    (
+      val db: TestDb,
+      told: Ref[IO, List[Affected]],
+    ):
+
+    private def tell(change: Affected): IO[Unit] = told.update(change :: _)
+
+    val users: UserStore   = UserStore(TestDb.tables, db)
+    val grants: GrantStore = GrantStore(TestDb.tables, db)
+    val groups: GroupStore = GroupStore(TestDb.tables, db)
+
+    val permissions: Permissions = Permissions(groups, grants)
+
+    val accounts: AccountStore = AccountStore(
+      TestDb.tables,
+      db,
+      users,
+      groups,
+      grants,
+      _ => DBIO.unit,
+    )
+
+    val auth: AuthService = AuthService(
+      users,
+      cheap,
+      accounts = Some(accounts),
+      affected = tell,
+    )
+
+    val service: AccountService = AccountService(
+      TestDb.tables,
+      db,
+      users,
+      groups,
+      grants,
+      Some(accounts),
+      cheap,
+      affected = tell,
+    )
+
+    val groupService: GroupService = GroupService(groups, affected = tell)
+
+    val sharing: SharingService = SharingService(
+      grants,
+      LinkStore(TestDb.tables),
+      groups,
+      db,
+      groups.named,
+      affected = tell,
+    )
+
+    def signUp(name: String): IO[User] = Fixtures.signUp(auth, name).map(_._1)
+
+    def grant
+      (
+        resource: Resource,
+        user: User,
+        access: Access,
+      )
+      : IO[Unit] = grant(
+      resource,
+      Principal.Person(user.id),
+      access,
+    )
+
+    def grant
+      (
+        resource: Resource,
+        principal: Principal,
+        access: Access,
+      )
+      : IO[Unit] = Fixtures.grant(grants, db)(resource, principal, access)
+
+    /** Whatever has been told since last asked, oldest first, forgetting it. */
+    def reported: IO[List[Affected]] = told.getAndSet(List.empty).map(_.reverse)
+
+  private def served(name: String)(check: World => IO[Unit]): IO[Unit] = TestDb
+    .open(s"managed-$name")
+    .use(db =>
+      Ref.of[IO, List[Affected]](List.empty).map(World(db, _)).flatMap(check),
+    )

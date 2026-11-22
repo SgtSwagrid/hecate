@@ -36,3 +36,9 @@ object Protocol:
 
   /** The most characters an email address may have, as mail allows. */
   val maxEmailLength: Int = 254
+
+  /**
+    * The most accounts one request may create. Each password is hashed before
+    * anything is stored, which takes around a tenth of a second.
+    */
+  val maxAccountsPerRequest: Int = 200
