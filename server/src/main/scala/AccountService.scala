@@ -1,7 +1,7 @@
 package com.alecdorrington.hecate
 package server
 
-import cats.effect.IO
+import cats.effect.{IO, Ref}
 import cats.effect.std.Console
 import cats.effect.syntax.all.*
 import cats.syntax.all.*
@@ -83,6 +83,13 @@ final class AccountService
   private val permissions = Permissions(groups, grants)
 
   /**
+    * The times, in milliseconds since the epoch, that each user lately asked
+    * for accounts to be made, with how many, kept in memory.
+    */
+  private val creations =
+    Ref.unsafe[IO, Map[Long, List[(Long, Int)]]](Map.empty)
+
+  /**
     * Lists the accounts a user manages, holding at least [[Access.View]] over
     * them, never their own.
     *
@@ -99,6 +106,7 @@ final class AccountService
       rows <- ifAny(ids)(Seq.empty[UserRow]): wanted =>
         tables.users.filter(_.id inSet wanted).sortBy(_.usernameKey).result
       suspended   <- users.suspendedAmong(ids)
+      temporary   <- users.temporaryAmong(ids)
       managers    <- groups.managersAt(Resource.userKind, ids, Access.View)
       invitations <- groups.invitationsOf(ids)
     yield rows
@@ -107,6 +115,7 @@ final class AccountService
           row.toUser,
           levels(row.id),
           suspended(row.id),
+          temporary(row.id),
           managers.getOrElse(row.id, List.empty),
           invitations.getOrElse(row.id, List.empty),
         ),
@@ -138,7 +147,9 @@ final class AccountService
     * Creates accounts for others to use, each managed by the owner the request
     * names, and each joining the group it names at once. All are created or
     * none. A password not given is generated, and every password is answered
-    * this once.
+    * this once. A guest may create none, and nobody more in an hour than
+    * [[AuthPolicy.accountsPerHour]]. Taken usernames are refused before any
+    * password is hashed.
     *
     * @param user
     *   The signed-in user, who must be able to address the owner and change the
@@ -156,13 +167,23 @@ final class AccountService
     : Answer[List[CreatedAccount]] =
     val owner = creation.owner.getOrElse(Principal.Person(user.id))
     failures
-      .attemptRefusable(checked(creationProblem(creation))(
-        mayCreate(user, owner, creation.group).flatMap:
-          case Some(refusal) => IO.pure(Left(refusal))
-          case None          => passwordsFor(creation).flatMap(made =>
-              store(user, owner, creation.group, made).map(Right(_)),
-            ),
-      ))
+      .attemptRefusable(
+        checked(
+          Option.when(user.guest)(AuthRefusal.GuestAccount),
+          creationProblem(creation),
+        )(
+          mayCreate(user, owner, creation.group)
+            .flatMap(_.fold(taken(creation))(refused => IO.pure(Some(refused))))
+            .flatMap(_.fold(allowed(user, creation.accounts.size))(refused =>
+              IO.pure(Some(refused)),
+            ))
+            .flatMap:
+              case Some(refusal) => IO.pure(Left(refusal))
+              case None          => passwordsFor(creation).flatMap(made =>
+                  store(user, owner, creation.group, made).map(Right(_)),
+                ),
+        ),
+      )
       .flatTap(
         _.toOption
           .traverse_(created =>
@@ -224,7 +245,7 @@ final class AccountService
       .flatTap(renamed =>
         IO.whenA(renamed.isRight)(
           tell(accountAffects(account)) *> tellNow(Affected.Account(account)) *>
-            tellNow(Affected.Groups(Audience.Everyone, Set.empty)),
+            tell(groups.acquaintances(account).map(List(_))),
         ),
       )
 
@@ -259,10 +280,11 @@ final class AccountService
           setting.password,
           policy.hashIterations,
         )
-        .flatMap(hash =>
+        .product(IO.realTime)
+        .flatMap((hash, now) =>
           db.run(
             managing(user.id, account, Access.Edit)(
-              users.setPassword(account, hash),
+              users.setPassword(account, hash, user.id, now.toMillis),
             ).transactionally,
           ),
         )
@@ -434,23 +456,39 @@ final class AccountService
     * stored.
     */
   private def mayCreate
-    (
-      user: User,
-      owner: Principal,
-      group: Option[Long],
-    )
+    (user: User, owner: Principal, group: Long)
     : IO[Option[AuthRefusal]] =
     for
       addressable <- groups.mayAddress(user.id, owner)
-      changeable  <-
-        group.traverse(id => permissions.access(user.id, Resource.group(id)))
+      changeable  <- permissions.access(user.id, Resource.group(group))
     yield Option
       .unless(addressable)(AuthRefusal.PrincipalMissing)
-      .orElse(
-        Option.when(
-          changeable.exists(!_.exists(_.includes(Access.Edit))),
-        )(AuthRefusal.GroupMissing),
-      )
+      .orElse(Option.unless(changeable.exists(_.includes(Access.Edit)))(
+        AuthRefusal.GroupMissing,
+      ))
+
+  /** Refuses usernames already held, before anything is hashed. */
+  private def taken(creation: AccountCreation): IO[Option[AuthRefusal]] = users
+    .heldAmong(creation.accounts.map(_.username.trim))
+    .map(held => Option.when(held.nonEmpty)(AuthRefusal.UsernamesTaken(held)))
+
+  /**
+    * Counts the accounts against the user's hourly allowance, or refuses them
+    * if they would exceed it.
+    */
+  private def allowed(user: User, count: Int): IO[Option[AuthRefusal]] = IO
+    .realTime
+    .flatMap(now =>
+      creations.modify: all =>
+        val since  = now.toMillis - AuthPolicy.hourMillis
+        val recent = all.getOrElse(user.id, List.empty).filter(_._1 > since)
+        if recent.map(_._2).sum + count > policy.accountsPerHour then
+          (
+            all.updated(user.id, recent),
+            Some(AuthRefusal.AccountsCreatedRecently(policy.accountsPerHour)),
+          )
+        else (all.updated(user.id, (now.toMillis, count) :: recent), None),
+    )
 
   /** Each account's username and password, generating any not given. */
   private def passwordsFor
@@ -474,31 +512,39 @@ final class AccountService
     (
       user: User,
       owner: Principal,
-      group: Option[Long],
+      group: Long,
       made: List[(String, String)],
     )
     : IO[List[CreatedAccount]] = made
     .parTraverseN(AccountService.hashers)((_, password) =>
       Passwords.hash(password, policy.hashIterations),
     )
-    .flatMap(hashes =>
-      db.run((for
-        stored <- users.createAll(made.map(_._1).zip(hashes))
-        _      <- groups
-          .mayAddressAt(user.id, owner)
-          .flatMap(refuseUnless(_, AuthRefusal.PrincipalMissing))
-        _ <- DBIO.seq(
-          stored.map(created =>
-            grants.grant(Grant(
-              Resource.user(created.id),
-              owner,
-              Access.Own,
-            )),
-          )*,
-        )
-        _ <-
-          group.fold(DBIO.unit)(groups.enrolAll(user.id, _, stored.map(_.id)))
-      yield stored).transactionally.asTry),
+    .product(IO.realTime)
+    .flatMap((hashes, now) =>
+      db.run(
+        (
+          for
+            stored <- users.createAll(
+              made.map(_._1).zip(hashes),
+              user.id,
+              now.toMillis,
+            )
+            _ <- groups
+              .mayAddressAt(user.id, owner)
+              .flatMap(refuseUnless(_, AuthRefusal.PrincipalMissing))
+            _ <- DBIO.seq(
+              stored.map(created =>
+                grants.grant(Grant(
+                  Resource.user(created.id),
+                  owner,
+                  Access.Own,
+                )),
+              )*,
+            )
+            _ <- groups.enrolAll(user.id, group, stored.map(_.id))
+          yield stored
+        ).transactionally.asTry,
+      ),
     )
     .flatMap:
       case Success(stored) => IO.pure(
@@ -515,23 +561,20 @@ final class AccountService
   private def createdAffects
     (
       owner: Principal,
-      group: Option[Long],
+      group: Long,
       created: Seq[Long],
     )
     : IO[List[Affected]] =
     for
       owners <- db.run(groups.usersOf(Seq(owner)))
-      joined <- group.traverse(id =>
-        groups
-          .surroundings(Seq(id))
-          .map(around =>
-            Affected.Groups(
-              Audience.People(around.managers ++ around.members),
-              around.enclosing,
-            ),
-          ),
-      )
-    yield Affected.Accounts(owners ++ created) :: joined.toList
+      around <- groups.surroundings(Seq(group))
+    yield List(
+      Affected.Accounts(owners ++ created),
+      Affected.Groups(
+        Audience.People(around.managers ++ around.members),
+        around.enclosing,
+      ),
+    )
 
   /** Whom a change to an account concerns: its managers, and its user. */
   private def accountAffects(account: Long): IO[List[Affected]] = db

@@ -199,5 +199,29 @@ enum AuthRefusal:
     */
   case TooManyAccounts(max: Int)
 
+  /**
+    * A user asked to create more accounts within an hour than the host allows.
+    *
+    * @param perHour
+    *   The most accounts one user may create in an hour.
+    */
+  case AccountsCreatedRecently(perHour: Int)
+
+  /**
+    * A guest asked to do what only someone with a username and password may,
+    * such as creating accounts for others.
+    */
+  case GuestAccount
+
+  /**
+    * Someone signed in to an account whose password someone else set, which its
+    * user must replace with their own first. Said only once the password is
+    * right.
+    */
+  case PasswordChangeRequired
+
+  /** A password to replace one someone else set was the same password. */
+  case PasswordReused
+
   /** A request failed for an internal reason, whose detail stays on the server. */
   case Failed

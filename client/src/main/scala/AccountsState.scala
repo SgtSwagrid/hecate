@@ -13,12 +13,11 @@ import scala.concurrent.ExecutionContext.Implicits.global
 
 /**
   * A browser-side store of the accounts the signed-in user manages, and of who
-  * manages their own, driving the endpoints under `/api/accounts` and
-  * `/api/auth/managers`. Every command refetches both, as does any change of
-  * signed-in user, and a refused read leaves its list empty. An account's
-  * invitations are answered through [[GroupsState.accept]] and
-  * [[GroupsState.decline]], and its managers changed through a [[SharingState]]
-  * of the segment `accounts`.
+  * manages their own, driving the endpoints under `/api/accounts`,
+  * `/api/auth/managers` and, for an account's invitations, `/api/invitations`.
+  * Every command refetches both lists, as does any change of signed-in user,
+  * and a refused read leaves its list empty. An account's managers are changed
+  * through a [[SharingState]] of the segment `accounts`.
   *
   * @param auth
   *   The sign-in state of the user managing the accounts.
@@ -37,7 +36,7 @@ final class AccountsState
   // anything is on screen.
   private given Owner = unsafeWindowOwner
 
-  private val errorVar: Var[Option[String]] = Var(None)
+  private val errorVar: Var[Option[AccountsState.Failure]] = Var(None)
 
   private val pendingVar: Var[Boolean] = Var(false)
 
@@ -53,8 +52,11 @@ final class AccountsState
     */
   val managers: Signal[List[Manager]] = listed[Manager]("/api/auth/managers")
 
-  /** The reason the last command was refused, if any. */
-  val error: Signal[Option[String]] = errorVar.signal
+  /**
+    * Why the last command was refused, if it was, with the account it
+    * concerned, until the next command or [[clearError]].
+    */
+  val error: Signal[Option[AccountsState.Failure]] = errorVar.signal
 
   /** Whether a command is in flight. Refetches do not count. */
   val pending: Signal[Boolean] = pendingVar.signal
@@ -64,7 +66,7 @@ final class AccountsState
 
   /**
     * Creates accounts, telling `created` each with its password, which is shown
-    * this once.
+    * this once. A refusal concerns no account.
     *
     * @param creation
     *   The accounts, the group they join and who owns them.
@@ -75,10 +77,14 @@ final class AccountsState
   def create
     (creation: AccountCreation)
     (created: List[CreatedAccount] => Unit)
-    : Unit = perform(Fetch.post("/api/accounts", body = creation))(response =>
+    : Unit = perform(
+    None,
+    Fetch.post("/api/accounts", body = creation),
+  )(response =>
     decode[List[CreatedAccount]](response.data) match
       case Right(accounts) => created(accounts)
-      case Left(_)         => errorVar.set(Some(wording.unreadableReply)),
+      case Left(_)         =>
+        errorVar.set(Some(AccountsState.Failure(None, wording.unreadableReply))),
   )
 
   /**
@@ -97,6 +103,7 @@ final class AccountsState
     (account: Long, username: String)
     (refused: () => Unit = () => ())
     : Unit = perform(
+    Some(account),
     Fetch.put(
       s"/api/accounts/$account/username",
       body = UsernameChange(username),
@@ -119,10 +126,13 @@ final class AccountsState
   def setPassword
     (account: Long, password: String)
     (set: () => Unit = () => ())
-    : Unit = perform(Fetch.put(
-    s"/api/accounts/$account/password",
-    body = PasswordSetting(password),
-  ))(_ => set())
+    : Unit = perform(
+    Some(account),
+    Fetch.put(
+      s"/api/accounts/$account/password",
+      body = PasswordSetting(password),
+    ),
+  )(_ => set())
 
   /**
     * Suspends an account, or lifts its suspension.
@@ -133,10 +143,41 @@ final class AccountsState
     * @param suspended
     *   Whether it is to be suspended.
     */
-  def suspend(account: Long, suspended: Boolean): Unit = perform(Fetch.put(
-    s"/api/accounts/$account/suspended",
-    body = suspended,
-  ))(_ => ())
+  def suspend(account: Long, suspended: Boolean): Unit = perform(
+    Some(account),
+    Fetch.put(
+      s"/api/accounts/$account/suspended",
+      body = suspended,
+    ),
+  )(_ => ())
+
+  /**
+    * Accepts an invitation sent to an account, for its user.
+    *
+    * @param account
+    *   The identifier of the account's user.
+    *
+    * @param invitation
+    *   The identifier of the invitation.
+    */
+  def accept(account: Long, invitation: Long): Unit = perform(
+    Some(account),
+    Fetch.post(s"/api/invitations/$invitation/accept"),
+  )(_ => ())
+
+  /**
+    * Declines an invitation sent to an account, for its user.
+    *
+    * @param account
+    *   The identifier of the account's user.
+    *
+    * @param invitation
+    *   The identifier of the invitation.
+    */
+  def decline(account: Long, invitation: Long): Unit = perform(
+    Some(account),
+    Fetch.post(s"/api/invitations/$invitation/decline"),
+  )(_ => ())
 
   /**
     * Releases an account, so that its user alone manages it again.
@@ -144,8 +185,10 @@ final class AccountsState
     * @param account
     *   The identifier of the account's user.
     */
-  def release(account: Long): Unit =
-    perform(Fetch.post(s"/api/accounts/$account/release"))(_ => ())
+  def release(account: Long): Unit = perform(
+    Some(account),
+    Fetch.post(s"/api/accounts/$account/release"),
+  )(_ => ())
 
   /**
     * Deletes an account and everything that belongs to it.
@@ -153,8 +196,10 @@ final class AccountsState
     * @param account
     *   The identifier of the account's user.
     */
-  def delete(account: Long): Unit =
-    perform(Fetch.delete(s"/api/accounts/$account"))(_ => ())
+  def delete(account: Long): Unit = perform(
+    Some(account),
+    Fetch.delete(s"/api/accounts/$account"),
+  )(_ => ())
 
   /** Discards the last error. */
   def clearError(): Unit = errorVar.set(None)
@@ -181,6 +226,7 @@ final class AccountsState
 
   private def perform
     (
+      account: Option[Long],
       request: EventStream[Response],
       refused: () => Unit = () => (),
     )
@@ -191,9 +237,25 @@ final class AccountsState
       outcome match
         case Outcome.Answered(response) => answered(response)
         case Outcome.Refused(reason)    =>
-          errorVar.set(Some(reason))
+          errorVar.set(Some(AccountsState.Failure(account, reason)))
           refused()
         case Outcome.Unreachable(_) =>
-          errorVar.set(Some(wording.unreachable))
+          errorVar.set(Some(
+            AccountsState.Failure(account, wording.unreachable),
+          ))
           refused()
       refresh()
+
+object AccountsState:
+
+  /**
+    * A command refused.
+    *
+    * @param account
+    *   The identifier of the account's user it concerned, or `None` for
+    *   creating accounts.
+    *
+    * @param reason
+    *   Why, worded for the reader.
+    */
+  final case class Failure(account: Option[Long], reason: String)

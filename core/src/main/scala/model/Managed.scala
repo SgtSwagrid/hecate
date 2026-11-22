@@ -30,6 +30,10 @@ final case class Manager(holder: Holder, access: Access) derives Codec.AsObject
   * @param suspended
   *   Whether the account is suspended, so that nobody can sign in to it.
   *
+  * @param temporaryPassword
+  *   Whether its password was set by someone else, and its user has yet to
+  *   choose their own, which they must before signing in.
+  *
   * @param managers
   *   Everyone holding a grant over the account, owners first.
   *
@@ -42,6 +46,7 @@ final case class ManagedAccount
     user: User,
     access: Access,
     suspended: Boolean,
+    temporaryPassword: Boolean,
     managers: List[Manager],
     invitations: List[Invitation] = List.empty,
   )
@@ -72,7 +77,7 @@ final case class NewAccount
   *
   * @param group
   *   The group each account is to join at once, which the signed-in user must
-  *   be able to change, or `None` for none.
+  *   be able to change.
   *
   * @param owner
   *   The principal to hold [[Access.Own]] over each account, which the
@@ -81,7 +86,7 @@ final case class NewAccount
 final case class AccountCreation
   (
     accounts: List[NewAccount],
-    group: Option[Long] = None,
+    group: Long,
     owner: Option[Principal] = None,
   )
   derives Codec.AsObject

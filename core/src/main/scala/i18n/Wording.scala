@@ -221,6 +221,35 @@ trait Wording:
   def tooManyAccounts(max: Int): String
 
   /**
+    * Words the refusal to create more accounts within an hour than allowed.
+    *
+    * @param perHour
+    *   The most accounts one user may create in an hour.
+    *
+    * @return
+    *   A sentence stating the number.
+    */
+  def accountsCreatedRecently(perHour: Int): String
+
+  /**
+    * The refusal of something a guest may not do, which should say that keeping
+    * their account with a username and password lets them.
+    */
+  val guestAccount: String
+
+  /**
+    * The refusal to sign in with a password someone else set, which should ask
+    * the user to choose their own.
+    */
+  val passwordChangeRequired: String
+
+  /**
+    * The refusal of a password to replace one someone else set that is the same
+    * password.
+    */
+  val passwordReused: String
+
+  /**
     * The refusal of a request that failed for an internal reason, the same for
     * every failure so that its cause cannot be guessed.
     */
@@ -372,42 +401,47 @@ trait Wording:
     *   A sentence the user reads.
     */
   final def phrase(refusal: AuthRefusal): String = refusal match
-    case AuthRefusal.SignedOut             => signedOut
-    case AuthRefusal.UsernameTaken         => usernameTaken
-    case AuthRefusal.CredentialsIncorrect  => credentialsIncorrect
-    case AuthRefusal.PasswordIncorrect     => passwordIncorrect
-    case AuthRefusal.RecoveryIncorrect     => recoveryIncorrect
-    case AuthRefusal.NoAccountDeletion     => noAccountDeletion
-    case AuthRefusal.UsernameEmpty         => usernameEmpty
-    case AuthRefusal.GuestNameEmpty        => guestNameEmpty
-    case AuthRefusal.NoGuests              => noGuests
-    case AuthRefusal.GuestsPaused          => guestsPaused
-    case AuthRefusal.NotGuest              => notGuest
-    case AuthRefusal.PasswordTooShort(min) => passwordTooShort(min)
-    case AuthRefusal.TooLong(max)          => tooLong(max)
-    case AuthRefusal.UserMissing(username) => userMissing(username)
-    case AuthRefusal.GroupMissing          => groupMissing
-    case AuthRefusal.InvitationMissing     => invitationMissing
-    case AuthRefusal.RequestMissing        => requestMissing
-    case AuthRefusal.LinkMissing           => linkMissing
-    case AuthRefusal.ParentGroupMissing    => parentGroupMissing
-    case AuthRefusal.GroupInsideItself     => groupInsideItself
-    case AuthRefusal.SoleOwner(count)      => soleOwner(count)
-    case AuthRefusal.ResourceMissing(kind) => resourceMissing(kind)
-    case AuthRefusal.NotOwner(kind)        => notOwner(kind)
-    case AuthRefusal.LastOwner(kind)       => lastOwner(kind)
-    case AuthRefusal.OwnershipByLink       => ownershipByLink
-    case AuthRefusal.PrincipalMissing      => principalMissing
-    case AuthRefusal.EmailInvalid          => emailInvalid
-    case AuthRefusal.EmailLinkMissing      => emailLinkMissing
-    case AuthRefusal.NoEmail               => noEmail
-    case AuthRefusal.MailedRecently        => mailedRecently
-    case AuthRefusal.Suspended             => suspended
-    case AuthRefusal.AccountManaged        => accountManaged
-    case AuthRefusal.ManagingSelf          => managingSelf
-    case AuthRefusal.UsernamesTaken(names) => usernamesTaken(names)
-    case AuthRefusal.TooManyAccounts(max)  => tooManyAccounts(max)
-    case AuthRefusal.Failed                => requestFailed
+    case AuthRefusal.SignedOut                        => signedOut
+    case AuthRefusal.UsernameTaken                    => usernameTaken
+    case AuthRefusal.CredentialsIncorrect             => credentialsIncorrect
+    case AuthRefusal.PasswordIncorrect                => passwordIncorrect
+    case AuthRefusal.RecoveryIncorrect                => recoveryIncorrect
+    case AuthRefusal.NoAccountDeletion                => noAccountDeletion
+    case AuthRefusal.UsernameEmpty                    => usernameEmpty
+    case AuthRefusal.GuestNameEmpty                   => guestNameEmpty
+    case AuthRefusal.NoGuests                         => noGuests
+    case AuthRefusal.GuestsPaused                     => guestsPaused
+    case AuthRefusal.NotGuest                         => notGuest
+    case AuthRefusal.PasswordTooShort(min)            => passwordTooShort(min)
+    case AuthRefusal.TooLong(max)                     => tooLong(max)
+    case AuthRefusal.UserMissing(username)            => userMissing(username)
+    case AuthRefusal.GroupMissing                     => groupMissing
+    case AuthRefusal.InvitationMissing                => invitationMissing
+    case AuthRefusal.RequestMissing                   => requestMissing
+    case AuthRefusal.LinkMissing                      => linkMissing
+    case AuthRefusal.ParentGroupMissing               => parentGroupMissing
+    case AuthRefusal.GroupInsideItself                => groupInsideItself
+    case AuthRefusal.SoleOwner(count)                 => soleOwner(count)
+    case AuthRefusal.ResourceMissing(kind)            => resourceMissing(kind)
+    case AuthRefusal.NotOwner(kind)                   => notOwner(kind)
+    case AuthRefusal.LastOwner(kind)                  => lastOwner(kind)
+    case AuthRefusal.OwnershipByLink                  => ownershipByLink
+    case AuthRefusal.PrincipalMissing                 => principalMissing
+    case AuthRefusal.EmailInvalid                     => emailInvalid
+    case AuthRefusal.EmailLinkMissing                 => emailLinkMissing
+    case AuthRefusal.NoEmail                          => noEmail
+    case AuthRefusal.MailedRecently                   => mailedRecently
+    case AuthRefusal.Suspended                        => suspended
+    case AuthRefusal.AccountManaged                   => accountManaged
+    case AuthRefusal.ManagingSelf                     => managingSelf
+    case AuthRefusal.UsernamesTaken(names)            => usernamesTaken(names)
+    case AuthRefusal.TooManyAccounts(max)             => tooManyAccounts(max)
+    case AuthRefusal.AccountsCreatedRecently(perHour) =>
+      accountsCreatedRecently(perHour)
+    case AuthRefusal.GuestAccount           => guestAccount
+    case AuthRefusal.PasswordChangeRequired => passwordChangeRequired
+    case AuthRefusal.PasswordReused         => passwordReused
+    case AuthRefusal.Failed                 => requestFailed
 
 object Wording:
 
@@ -511,6 +545,18 @@ object Wording:
 
     override def tooManyAccounts(max: Int): String =
       s"At most $max accounts can be created at once."
+
+    override def accountsCreatedRecently(perHour: Int): String =
+      s"You can create at most $perHour accounts an hour. Try again later."
+
+    override val guestAccount: String =
+      "Keep your account, with a username and password, to do this."
+
+    override val passwordChangeRequired: String =
+      "Someone else set this password. Choose one of your own to sign in."
+
+    override val passwordReused: String =
+      "Choose a password different from the one you were given."
 
     override val requestFailed: String = "The request couldn't be completed."
 

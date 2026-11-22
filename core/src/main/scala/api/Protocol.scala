@@ -38,6 +38,13 @@ object Protocol:
   val maxEmailLength: Int = 254
 
   /**
+    * The status of a sign-in refused because the account's password was set by
+    * someone else, which the user must replace first, rather than the usual
+    * `400`, so that a client can ask for a password of their own.
+    */
+  val replacementStatus: Int = 403
+
+  /**
     * The most accounts one request may create. Each password is hashed before
     * anything is stored, which takes around a tenth of a second.
     */

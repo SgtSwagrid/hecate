@@ -16,6 +16,27 @@ final case class PasswordChange(current: String, replacement: String)
   derives Codec.AsObject
 
 /**
+  * A request to sign in to an account whose password someone else set,
+  * replacing it with one of the user's own.
+  *
+  * @param username
+  *   The username of the account.
+  *
+  * @param current
+  *   The password someone else set.
+  *
+  * @param replacement
+  *   The user's own password, which must differ from it.
+  */
+final case class PasswordReplacement
+  (
+    username: String,
+    current: String,
+    replacement: String,
+  )
+  derives Codec.AsObject
+
+/**
   * A password given again to confirm a consequential request, such as deleting
   * an account.
   *

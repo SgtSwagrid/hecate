@@ -1,13 +1,16 @@
 package com.alecdorrington.hecate
 package tapir
 
-import com.alecdorrington.hecate.api.Protocol.{languageCookie, sessionCookie}
+import com.alecdorrington.hecate.api.Protocol.{
+  languageCookie, replacementStatus, sessionCookie,
+}
 import com.alecdorrington.hecate.model.{
   AuthRules, Credentials, EmailChange, EmailConfirmation, EmailStatus,
-  PasswordChange, PasswordCheck, PasswordReset, PasswordResetRequest, Recovery,
-  RecoveryCodes, User,
+  PasswordChange, PasswordCheck, PasswordReplacement, PasswordReset,
+  PasswordResetRequest, Recovery, RecoveryCodes, User,
 }
 import com.alecdorrington.hecate.tapir.Schemas.given
+import sttp.model.StatusCode
 import sttp.model.headers.CookieValueWithMeta
 import sttp.tapir.*
 import sttp.tapir.json.circe.*
@@ -91,12 +94,22 @@ object AuthApi:
     .out(jsonBody[User])
     .out(setCookie(sessionCookie))
 
-  /** An endpoint that signs in to an existing account. */
+  /**
+    * An endpoint that signs in to an existing account. A sign-in refused
+    * because someone else set the account's password, which its user must
+    * replace first ([[replacePassword]]), answers
+    * [[com.alecdorrington.hecate.api.Protocol.replacementStatus]] rather than
+    * `400`, beside its sentence.
+    */
   val signIn
-    : Open[
+    : PublicEndpoint[
       (Credentials, Option[String]),
+      (StatusCode, String),
       (User, CookieValueWithMeta),
-    ] = base
+      Any,
+    ] = endpoint
+    .errorOut(statusCode)
+    .errorOut(stringBody)
     .post
     .in("api" / "auth" / "sign-in")
     .in(jsonBody[Credentials])
@@ -150,6 +163,27 @@ object AuthApi:
     .get
     .in("api" / "auth" / "recovery-codes")
     .out(jsonBody[Int])
+
+  /**
+    * An endpoint that signs in to an account whose password someone else set,
+    * replacing it with the user's own: as sign-in, but with the replacement,
+    * which must differ.
+    */
+  val replacePassword
+    : Open[
+      (PasswordReplacement, Option[String]),
+      (User, CookieValueWithMeta),
+    ] = base
+    .post
+    .in("api" / "auth" / "password" / "replace")
+    .in(jsonBody[PasswordReplacement])
+    .in(language)
+    .out(jsonBody[User])
+    .out(setCookie(sessionCookie))
+
+  /** The status of a refused sign-in, of the reason given. */
+  def signInStatus(replacing: Boolean): StatusCode =
+    if replacing then StatusCode(replacementStatus) else StatusCode.BadRequest
 
   /**
     * An endpoint that regains an account with a recovery code: sets a new

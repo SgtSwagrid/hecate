@@ -295,6 +295,21 @@ final class AuthTables
       row => Some(row.userId),
     )
 
+  /**
+    * A table of passwords someone other than their user set, with the columns
+    * of [[TemporaryPasswordRow]]: one row for each account whose user must
+    * choose a password of their own before signing in.
+    */
+  final class TemporaryPasswords
+    (tag: Tag)
+    extends Table[TemporaryPasswordRow](tag, s"${ prefix }temporary_passwords"):
+
+    def userId   = column[Long]("user_id", O.PrimaryKey)
+    def setterId = column[Long]("setter_id")
+    def setAt    = column[Long]("set_at")
+
+    override def * = (userId, setterId, setAt).mapTo[TemporaryPasswordRow]
+
   /** The table of users. */
   val users = TableQuery[Users]
 
@@ -330,6 +345,9 @@ final class AuthTables
 
   /** The table of suspended accounts. */
   val suspensions = TableQuery[Suspensions]
+
+  /** The table of passwords someone other than their user set. */
+  val temporaryPasswords = TableQuery[TemporaryPasswords]
 
   private val lockable = profile
     .capabilities
@@ -394,6 +412,7 @@ final class AuthTables
     emailLinks,
     sentMails,
     suspensions,
+    temporaryPasswords,
   )
 
 /**
@@ -691,6 +710,21 @@ final case class SentMailRow
   *   The identifier of the suspended account's user.
   */
 final case class SuspensionRow(userId: Long)
+
+/**
+  * A stored password someone other than its user set, deleted once the user
+  * sets one of their own.
+  *
+  * @param userId
+  *   The identifier of the account's user.
+  *
+  * @param setterId
+  *   The identifier of the user who set it.
+  *
+  * @param setAt
+  *   The time it was set, in milliseconds since the epoch.
+  */
+final case class TemporaryPasswordRow(userId: Long, setterId: Long, setAt: Long)
 
 /**
   * A kind of link sent by email.

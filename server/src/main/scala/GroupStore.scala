@@ -1071,6 +1071,27 @@ final class GroupStore
     .map(_.toOption.map(row => (row.groupId, row.userId)))
 
   /**
+    * Whom a change to how a user is shown, such as their name, concerns, as far
+    * as groups show them: everyone who sees anything of the groups they are in,
+    * invited to or asking to join.
+    */
+  private[server] def acquaintances(user: Long): IO[Affected] = db
+    .run(
+      for
+        joined  <- directOf(user)
+        invited <- groupsWith(invitationPairs, user)
+        asked   <- groupsWith(requestPairs, user)
+      yield (joined.toSet ++ invited ++ asked).toSeq,
+    )
+    .flatMap(surroundings)
+    .map(around =>
+      Affected.Groups(
+        Audience.People(around.people + user),
+        around.enclosing,
+      ),
+    )
+
+  /**
     * Whom a change to who is in, invited to or asking to join some groups
     * concerns: the groups' managers and members, that person, and whoever
     * manages the person's account, who sees what awaits it.
