@@ -483,8 +483,9 @@ even through a group, confers nothing (`Permissions` leaves it out), nobody may 
 anything over their own account (`ManagingSelf`), and nobody manages their own account through
 these endpoints. Its user keeps their password their own, changing it with the old one as before,
 and sees who manages them (`GET /api/auth/managers`); but while it is managed, deleting it, like
-renaming it, is its managers' alone (`AccountManaged`). Nothing here lets a manager sign in as
-anyone, so a host that keeps its users' private work private keeps it so from their managers too.
+renaming it, is its managers' alone (`AccountManaged`). No grant lets a manager sign in as anyone
+or see their work. Only an account's own people manage it: a group is never granted anything over
+an account, nor owns one made for it, as each of its members would manage it (`PrincipalMissing`).
 
 Setting a password signs out every session of the account and ends every link sent it by email,
 but leaves its recovery codes, which are its user's; it is reported as `Affected.PasswordSet`, so
@@ -493,20 +494,23 @@ account or since, is *temporary*: nobody can sign in with it. Signing in answers
 `Protocol.replacementStatus` (403) rather than 400 (`PasswordChangeRequired`), and the user signs
 in instead with `POST /api/auth/password/replace`, giving the password they were given and one of
 their own, which must differ from it (`PasswordReused`); `AuthState.replacing` says when to ask
-for it. So whoever set the password knows it only until the account's user first signs in, and
-cannot use it themselves. Recovering, resetting or changing a password makes it the user's own
-too; `ManagedAccount.temporaryPassword` tells managers whose is still temporary. A suspended account cannot be signed in to, by password,
-recovery code or emailed link, each refused as `Suspended` only once the secret given is right, and
-its sessions end. Suspensions and temporary passwords are the two tables this adds,
-`suspensions` and `temporary_passwords`, each a row per account.
+for it. Recovering, resetting or changing a password makes it the user's own too;
+`ManagedAccount.temporaryPassword` tells managers whose is still temporary. Nothing can stop
+whoever hands a password over from using it first, so every password someone else set stays on
+record, with who set it and when it was replaced, and its user sees them all
+(`GET /api/auth/passwords-set`, `AccountsState.passwordsSet`): a manager who signs in with one
+cannot hide that. A suspended account cannot be signed in to, by password, recovery code or emailed
+link, each refused as `Suspended` only once the secret given is right, and its sessions end.
+Suspensions and passwords set are the two tables this adds: `suspensions`, a row per account, and
+`passwords_set`, a row per password set.
 
 `POST /api/accounts` creates accounts in bulk, all or none, up to `Protocol.maxAccountsPerRequest`
 at once: each a username and, if you like, a password (one is generated otherwise, and every
 password is answered this once, never stored unhashed). They join at once a group the caller may
 change, and are owned by the caller, or by a principal the caller names and may address (a group
 of colleagues, say). A guest may create none, and nobody more in an hour than
-`AuthPolicy.accountsPerHour` (300 by default, counted in memory); taken usernames are refused
-before any password is hashed. Inviting an account you may change to a group you may change joins it at
+`AuthPolicy.accountsPerHour` (300 by default, counted in memory, a request refused for its names
+included, as the refusal names them); taken usernames are refused before any password is hashed. Inviting an account you may change to a group you may change joins it at
 once too, as you agree for both sides. A username taken, or given twice, is refused naming each
 (`UsernamesTaken`).
 
@@ -699,6 +703,7 @@ ask again who is signed in whenever one is refused.
 | `POST`   | `/api/auth/email/confirm`               | Confirm an email address with a link.     |
 | `POST`   | `/api/auth/account/delete`              | Delete your account.                      |
 | `GET`    | `/api/auth/managers`                    | List who manages your account.            |
+| `GET`    | `/api/auth/passwords-set`               | List the passwords others set for you.    |
 | `GET`    | `/api/accounts`                         | List the accounts you manage.             |
 | `POST`   | `/api/accounts`                         | Create accounts that you manage.          |
 | `PUT`    | `/api/accounts/{account}/username`      | Rename an account you manage.             |

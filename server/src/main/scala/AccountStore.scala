@@ -57,8 +57,9 @@ final class AccountStore
     * @param user
     *   The identifier of the user to delete.
     */
-  def delete(user: Long): IO[Unit] =
-    db.run(deleting(user)(DBIO.unit).transactionally)
+  def delete(user: Long): IO[Unit] = db
+    .run(deleting(user)(DBIO.successful(Option.empty[Unit])).transactionally)
+    .void
 
   /**
     * Deletes an account at its own user's request, as [[delete]] does, unless
@@ -69,27 +70,43 @@ final class AccountStore
     * @param user
     *   The identifier of the user to delete.
     */
-  def deleteOwn(user: Long): IO[Unit] = db.run(
-    deleting(user)(
-      grants
-        .granted(Resource.user(user))
-        .flatMap(held =>
-          refuseUnless(
-            held.isEmpty,
-            AuthRefusal.AccountManaged,
-          ),
-        ),
-    ).transactionally,
-  )
+  def deleteOwn(user: Long): IO[Unit] = db
+    .run(
+      deleting(user)(
+        grants
+          .granted(Resource.user(user))
+          .flatMap(held =>
+            refuseUnless(
+              held.isEmpty,
+              AuthRefusal.AccountManaged,
+            ),
+          )
+          .map(_ => Option.empty[Unit]),
+      ).transactionally,
+    )
+    .void
 
   /**
-    * Deletes an account once a check passes under its user's row lock, which
-    * guards the grants over the account too, in the caller's transaction.
+    * Deletes an account unless a check, read under its user's row lock before
+    * anything is written, objects, in the caller's transaction. The lock guards
+    * the grants over the account too.
+    *
+    * @return
+    *   An action producing the check's objection, deleting nothing, or `None`
+    *   once the account is deleted.
     */
-  private[server] def deleting(user: Long)(check: DBIO[Unit]): DBIO[Unit] =
+  private[server] def deleting[X]
+    (user: Long)
+    (check: DBIO[Option[X]])
+    : DBIO[Option[X]] =
     for
-      _      <- tables.lockUser(user)
-      _      <- check
+      _         <- tables.lockUser(user)
+      objection <- check
+      _         <- objection.fold(deleted(user))(_ => DBIO.unit)
+    yield objection
+
+  private def deleted(user: Long): DBIO[Unit] =
+    for
       doomed <- groups.soleGroupsOf(user)
       _      <- cascade(Seq(Principal.Person(user)))
       _      <-

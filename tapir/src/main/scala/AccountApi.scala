@@ -2,8 +2,8 @@ package com.alecdorrington.hecate
 package tapir
 
 import com.alecdorrington.hecate.model.{
-  AccountCreation, CreatedAccount, ManagedAccount, Manager, PasswordSetting,
-  User, UsernameChange,
+  AccountCreation, CreatedAccount, ManagedAccount, Manager, PasswordSet,
+  PasswordSetting, User, UsernameChange,
 }
 import com.alecdorrington.hecate.tapir.Schemas.given
 import sttp.tapir.*
@@ -54,6 +54,16 @@ object AccountApi:
     .get
     .in("api" / "auth" / "managers")
     .out(jsonBody[List[Manager]])
+
+  /**
+    * An endpoint that lists the passwords anyone else set for the signed-in
+    * user's own account, newest first.
+    */
+  val passwordsSet: AuthApi.Secured[Unit, List[PasswordSet]] = AuthApi
+    .secured
+    .get
+    .in("api" / "auth" / "passwords-set")
+    .out(jsonBody[List[PasswordSet]])
 
   /** An endpoint that renames an account, returning its user as renamed. */
   val rename: AuthApi.Secured[(Long, UsernameChange), User] = AuthApi

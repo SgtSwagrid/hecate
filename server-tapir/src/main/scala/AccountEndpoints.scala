@@ -37,6 +37,11 @@ final class AccountEndpoints
   lazy val managers: ServerEndpoint[Any, IO] =
     auth.served(AccountApi.managers)(user => _ => accounts.managers(user))
 
+  /** The server endpoint for [[AccountApi.passwordsSet]]. */
+  lazy val passwordsSet: ServerEndpoint[Any, IO] = auth.served(
+    AccountApi.passwordsSet,
+  )(user => _ => accounts.passwordsSet(user))
+
   /** The server endpoint for [[AccountApi.rename]]. */
   lazy val rename: ServerEndpoint[Any, IO] = auth.served(AccountApi.rename)(
     user => (account, change) => accounts.rename(user, account, change),
@@ -67,6 +72,7 @@ final class AccountEndpoints
     list,
     create,
     managers,
+    passwordsSet,
     rename,
     setPassword,
     suspend,

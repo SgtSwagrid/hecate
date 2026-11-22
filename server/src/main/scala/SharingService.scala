@@ -111,6 +111,13 @@ final class SharingService
       principal == Principal.Person(resource.id) &&
       resource.kind == Resource.userKind,
     )(AuthRefusal.ManagingSelf),
+    // A group managing an account would make each of its members a manager.
+    Option.when(
+      resource.kind == Resource.userKind &&
+      (principal match
+        case Principal.Group(_) => true
+        case _                  => false),
+    )(AuthRefusal.PrincipalMissing),
   )(owning(user, resource)(
     groups
       .mayAddress(user.id, principal)

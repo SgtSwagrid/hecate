@@ -8,7 +8,8 @@ import cats.syntax.all.*
 import com.alecdorrington.hecate.api.Protocol
 import com.alecdorrington.hecate.model.{
   Access, AccountCreation, AuthRefusal, CreatedAccount, Grant, ManagedAccount,
-  Manager, PasswordSetting, Principal, Resource, User, UsernameChange,
+  Manager, PasswordSet, PasswordSetting, Principal, Resource, User,
+  UsernameChange,
 }
 import java.security.SecureRandom
 import scala.util.{Failure, Success}
@@ -117,7 +118,13 @@ final class AccountService
           suspended(row.id),
           temporary(row.id),
           managers.getOrElse(row.id, List.empty),
-          invitations.getOrElse(row.id, List.empty),
+          invitations
+            .getOrElse(row.id, List.empty)
+            .map(invitation =>
+              // Who sent it is shown only to those who may answer it.
+              if levels(row.id).includes(Access.Edit) then invitation
+              else invitation.copy(inviter = None),
+            ),
         ),
       )
       .toList,
@@ -142,6 +149,20 @@ final class AccountService
       )
       .map(_.getOrElse(user.id, List.empty)),
   ))
+
+  /**
+    * Lists the passwords anyone else set for a user's own account, newest
+    * first, each with who set it and when the user replaced it, so that a
+    * password set for them is never hidden from them.
+    *
+    * @param user
+    *   The signed-in user.
+    *
+    * @return
+    *   An answer with the passwords set, or a refusal.
+    */
+  def passwordsSet(user: User): Answer[List[PasswordSet]] =
+    failures.attempt(users.passwordsSetFor(user.id))
 
   /**
     * Creates accounts for others to use, each managed by the owner the request
@@ -170,13 +191,20 @@ final class AccountService
       .attemptRefusable(
         checked(
           Option.when(user.guest)(AuthRefusal.GuestAccount),
+          // An account managed by a group is managed by each of its members.
+          creation
+            .owner
+            .collect { case Principal.Group(_) =>
+              AuthRefusal.PrincipalMissing
+            },
           creationProblem(creation),
         )(
+          // Counted before its names are checked, as each refusal names some.
           mayCreate(user, owner, creation.group)
-            .flatMap(_.fold(taken(creation))(refused => IO.pure(Some(refused))))
             .flatMap(_.fold(allowed(user, creation.accounts.size))(refused =>
               IO.pure(Some(refused)),
             ))
+            .flatMap(_.fold(taken(creation))(refused => IO.pure(Some(refused))))
             .flatMap:
               case Some(refusal) => IO.pure(Left(refusal))
               case None          => passwordsFor(creation).flatMap(made =>
@@ -374,22 +402,54 @@ final class AccountService
     * @return
     *   An answer with nothing, or a refusal.
     */
-  def delete(user: User, account: Long): Answer[Unit] = accounts match
+  def delete(user: User, account: Long): Answer[Unit] =
+    deleteUnless(user, account)(DBIO.successful(Option.empty[Unit])).map(_.void)
+
+  /**
+    * Deletes an account the user owns, as [[delete]] does, unless the host
+    * objects: its objection is read in the deletion's transaction, under the
+    * account's row lock, before anything is written, so that whatever the host
+    * reads cannot change before the account is gone, if the host locks that row
+    * too wherever it writes it.
+    *
+    * @tparam E
+    *   The host's objections.
+    *
+    * @param user
+    *   The signed-in user.
+    *
+    * @param account
+    *   The identifier of the account's user.
+    *
+    * @param objection
+    *   An action reading the host's objection to the deletion, if any.
+    *
+    * @return
+    *   An answer with the objection, deleting nothing, or `None` once the
+    *   account is deleted, or a refusal.
+    */
+  def deleteUnless[E]
+    (user: User, account: Long)
+    (objection: DBIO[Option[E]])
+    : Answer[Option[E]] = accounts match
     case None        => IO.pure(Left(AuthRefusal.NoAccountDeletion))
     case Some(store) => failures
         .attempt(db.run((for
           formerly <- permissions.holding(Resource.user(account))
-          _ <- store.deleting(account)(permitted(user.id, account, Access.Own))
-        yield formerly).transactionally))
+          objected <- store.deleting(account)(
+            permitted(user.id, account, Access.Own) >> objection,
+          )
+        yield objected.toLeft(formerly)).transactionally))
         .flatTap(
           _.toOption
+            .flatMap(_.toOption)
             .traverse_(formerly =>
               tellNow(Affected.Account(account)) *>
                 tellNow(Affected.Groups(Audience.Everyone, Set.empty)) *>
                 tellNow(Affected.Accounts(formerly)),
             ),
         )
-        .map(_.void)
+        .map(_.map(_.left.toOption))
 
   /**
     * Runs a change to an account once the user is found to hold at least the

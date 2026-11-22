@@ -18,6 +18,29 @@ import io.circe.Codec
 final case class Manager(holder: Holder, access: Access) derives Codec.AsObject
 
 /**
+  * A password someone other than its user set for their account, which its user
+  * is always shown, so that nobody can set one unseen.
+  *
+  * @param setter
+  *   Who set it, or [[Gated.Absent]] once their account is deleted.
+  *
+  * @param setAt
+  *   When it was set, in milliseconds since the epoch.
+  *
+  * @param replacedAt
+  *   When the account's user, or whoever signed in with it, replaced it with a
+  *   password of their own, in milliseconds since the epoch; `None` while it
+  *   must still be replaced before anyone signs in.
+  */
+final case class PasswordSet
+  (
+    setter: Gated[User],
+    setAt: Long,
+    replacedAt: Option[Long],
+  )
+  derives Codec.AsObject
+
+/**
   * An account as someone who manages it sees it: anyone holding at least
   * [[Access.View]] over it, never its own user.
   *

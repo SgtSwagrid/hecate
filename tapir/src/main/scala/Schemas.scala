@@ -10,8 +10,8 @@ import com.alecdorrington.hecate.model.{
   Holder, Invitation, Invitee, InviteLink, JoinableGroup, LinkPreview,
   LinkTarget, ManagedAccount, ManagedGroup, Manager, Membership, NewAccount,
   PasswordChange, PasswordCheck, PasswordReplacement, PasswordReset,
-  PasswordResetRequest, PasswordSetting, Permitted, Principal, Recovery,
-  RecoveryCodes, Resource, User, UsernameChange, Welcome,
+  PasswordResetRequest, PasswordSet, PasswordSetting, Permitted, Principal,
+  Recovery, RecoveryCodes, Resource, User, UsernameChange, Welcome,
 }
 import sttp.tapir.{FieldName, Schema, SchemaType, Validator}
 
@@ -81,6 +81,7 @@ object Schemas:
   given Schema[Grant] = Schema.derived
 
   given Schema[Manager]        = Schema.derived
+  given Schema[PasswordSet]    = Schema.derived
   given Schema[ManagedAccount] = Schema.derived
   given Schema[UsernameChange] = Schema.derived
 

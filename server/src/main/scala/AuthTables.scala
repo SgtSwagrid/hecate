@@ -297,18 +297,23 @@ final class AuthTables
 
   /**
     * A table of passwords someone other than their user set, with the columns
-    * of [[TemporaryPasswordRow]]: one row for each account whose user must
-    * choose a password of their own before signing in.
+    * of [[PasswordSetRow]], kept once replaced so that the user always sees who
+    * set their password. One not yet replaced must be before its user signs in.
     */
-  final class TemporaryPasswords
+  final class PasswordsSet
     (tag: Tag)
-    extends Table[TemporaryPasswordRow](tag, s"${ prefix }temporary_passwords"):
+    extends Table[PasswordSetRow](tag, s"${ prefix }passwords_set"):
 
-    def userId   = column[Long]("user_id", O.PrimaryKey)
-    def setterId = column[Long]("setter_id")
-    def setAt    = column[Long]("set_at")
+    def id         = column[Long]("id", O.PrimaryKey, O.AutoInc)
+    def userId     = column[Long]("user_id")
+    def setterId   = column[Long]("setter_id")
+    def setAt      = column[Long]("set_at")
+    def replacedAt = column[Option[Long]]("replaced_at")
 
-    override def * = (userId, setterId, setAt).mapTo[TemporaryPasswordRow]
+    def byUser = index(s"${ prefix }passwords_set_user", userId)
+
+    override def * =
+      (id, userId, setterId, setAt, replacedAt).mapTo[PasswordSetRow]
 
   /** The table of users. */
   val users = TableQuery[Users]
@@ -347,7 +352,7 @@ final class AuthTables
   val suspensions = TableQuery[Suspensions]
 
   /** The table of passwords someone other than their user set. */
-  val temporaryPasswords = TableQuery[TemporaryPasswords]
+  val passwordsSet = TableQuery[PasswordsSet]
 
   private val lockable = profile
     .capabilities
@@ -412,7 +417,7 @@ final class AuthTables
     emailLinks,
     sentMails,
     suspensions,
-    temporaryPasswords,
+    passwordsSet,
   )
 
 /**
@@ -712,8 +717,11 @@ final case class SentMailRow
 final case class SuspensionRow(userId: Long)
 
 /**
-  * A stored password someone other than its user set, deleted once the user
-  * sets one of their own.
+  * A stored password someone other than its user set, kept once the user
+  * replaces it with one of their own.
+  *
+  * @param id
+  *   The identifier of the setting.
   *
   * @param userId
   *   The identifier of the account's user.
@@ -723,8 +731,19 @@ final case class SuspensionRow(userId: Long)
   *
   * @param setAt
   *   The time it was set, in milliseconds since the epoch.
+  *
+  * @param replacedAt
+  *   The time its user replaced it, in milliseconds since the epoch, if they
+  *   have.
   */
-final case class TemporaryPasswordRow(userId: Long, setterId: Long, setAt: Long)
+final case class PasswordSetRow
+  (
+    id: Long,
+    userId: Long,
+    setterId: Long,
+    setAt: Long,
+    replacedAt: Option[Long],
+  )
 
 /**
   * A kind of link sent by email.

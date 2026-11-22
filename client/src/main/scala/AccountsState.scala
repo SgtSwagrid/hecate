@@ -3,8 +3,8 @@ package client
 
 import com.alecdorrington.hecate.i18n.Wording
 import com.alecdorrington.hecate.model.{
-  AccountCreation, CreatedAccount, ManagedAccount, Manager, PasswordSetting,
-  UsernameChange,
+  AccountCreation, CreatedAccount, ManagedAccount, Manager, PasswordSet,
+  PasswordSetting, UsernameChange,
 }
 import com.raquo.laminar.api.L.*
 import io.circe.Decoder
@@ -51,6 +51,13 @@ final class AccountsState
     * an account they manage alone.
     */
   val managers: Signal[List[Manager]] = listed[Manager]("/api/auth/managers")
+
+  /**
+    * The passwords anyone else set for the signed-in user's own account, newest
+    * first, each with who set it and when it was replaced.
+    */
+  val passwordsSet: Signal[List[PasswordSet]] =
+    listed[PasswordSet]("/api/auth/passwords-set")
 
   /**
     * Why the last command was refused, if it was, with the account it

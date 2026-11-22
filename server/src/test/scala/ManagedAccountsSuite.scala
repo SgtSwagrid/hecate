@@ -4,10 +4,10 @@ package server
 import Fixtures.{cheap, enrol}
 import cats.effect.{IO, Ref}
 import com.alecdorrington.hecate.model.{
-  Access, AccountCreation, AuthRefusal, CreatedAccount, Credentials,
+  Access, AccountCreation, AuthRefusal, CreatedAccount, Credentials, Gated,
   GroupDetails, Holder, Manager, NewAccount, PasswordChange,
-  PasswordReplacement, PasswordSetting, Principal, Recovery, Resource, User,
-  UsernameChange,
+  PasswordReplacement, PasswordSet, PasswordSetting, Principal, Recovery,
+  Resource, User, UsernameChange,
 }
 import munit.CatsEffectSuite
 import slick.dbio.DBIO
@@ -179,6 +179,146 @@ class ManagedAccountsSuite extends CatsEffectSuite:
         // A refused request counts for nothing.
         assert(third.isRight)
 
+  test("a request refused for its names still counts towards the hour"):
+    served(
+      "limits-taken",
+      AuthPolicy(hashIterations = 1000, accountsPerHour = 3),
+    ): world =>
+      import world.*
+      for
+        coach <- signUp("coach")
+        first <- createIn(coach, NewAccount("Ada"))
+        taken <- createIn(coach, NewAccount("Ada"))
+        third <- createIn(coach, NewAccount("Ben"))
+        over  <- createIn(coach, NewAccount("Cy"))
+      yield
+        assert(first.isRight)
+        assertEquals(
+          taken,
+          Left(AuthRefusal.UsernamesTaken(List("Ada"))),
+        )
+        assert(third.isRight)
+        // Without the refused request, Cy would be the third this hour.
+        assertEquals(
+          over,
+          Left(AuthRefusal.AccountsCreatedRecently(3)),
+        )
+
+  test("every password someone else set stays on record for its user"):
+    served("record"): world =>
+      import world.*
+      for
+        coach <- signUp("coach")
+        made  <- createIn(
+          coach,
+          NewAccount("Ada", Some("given-pass-1")),
+        )
+        ada = made.toOption.get.head.user
+        unreplaced <- users.passwordsSetFor(ada.id)
+        _          <- replace(
+          auth,
+          "Ada",
+          "given-pass-1",
+          "her-own-pass",
+        )
+        _ <- service.setPassword(
+          coach,
+          ada.id,
+          PasswordSetting("given-pass-2"),
+        )
+        // Whoever signs in with it replaces it, and the record says so.
+        _ <- replace(
+          auth,
+          "Ada",
+          "given-pass-2",
+          "taken-over-1",
+        )
+        record <- service.passwordsSet(ada)
+        listed <- service.list(coach)
+      yield
+        assertEquals(
+          unreplaced.map(set => (set.setter, set.replacedAt)),
+          List((Gated.Shown(coach), None)),
+        )
+        val sets = record.toOption.get
+        assertEquals(
+          sets.map(_.setter),
+          List.fill(2)(Gated.Shown(coach)),
+        )
+        assert(
+          sets.forall(_.replacedAt.isDefined),
+          sets,
+        )
+        assert(sets.head.setAt >= sets(1).setAt, sets)
+        assertEquals(
+          listed.map(_.map(_.temporaryPassword)),
+          Right(List(false)),
+        )
+
+  test("a host's objection to a deletion keeps the account"):
+    served("objection"): world =>
+      import world.*
+      for
+        coach <- signUp("coach")
+        made  <- createIn(coach, NewAccount("Ada"))
+        ada = made.toOption.get.head.user
+        objected <- service.deleteUnless(coach, ada.id)(DBIO.successful(Some(
+          "work elsewhere",
+        )))
+        kept     <- users.find(ada.id)
+        stranger <- signUp("stranger")
+        refused  <- service.deleteUnless(stranger, ada.id)(DBIO.successful(
+          Option.empty[String],
+        ))
+        deleted <- service.deleteUnless(coach, ada.id)(DBIO.successful(
+          Option.empty[String],
+        ))
+        gone <- users.find(ada.id)
+      yield
+        assertEquals(
+          objected,
+          Right(Some("work elsewhere")),
+        )
+        assert(kept.isDefined)
+        assertEquals(
+          refused,
+          Left(AuthRefusal.ResourceMissing("user")),
+        )
+        assertEquals(deleted, Right(None))
+        assertEquals(gone, None)
+
+  test("a group never manages an account, by sharing or by creation"):
+    served("no-groups"): world =>
+      import world.*
+      for
+        coach <- signUp("coach")
+        staff <- groups.create(coach.id, GroupDetails("Staff"))
+        made  <- createIn(coach, NewAccount("Ada"))
+        ada = made.toOption.get.head.user
+        shared <- sharing.grant(
+          coach,
+          Resource.user(ada.id),
+          Principal.Group(staff.id),
+          Access.Edit,
+        )
+        owned <- service.create(
+          coach,
+          AccountCreation(
+            List(NewAccount("Ben")),
+            staff.id,
+            Some(Principal.Group(staff.id)),
+          ),
+        )
+      yield
+        assertEquals(
+          shared,
+          Left(AuthRefusal.PrincipalMissing),
+        )
+        assertEquals(
+          owned,
+          Left(AuthRefusal.PrincipalMissing),
+        )
+
   test("an editor renames and sets passwords; a viewer or stranger cannot"):
     served("edit"): world =>
       import world.*
@@ -313,12 +453,19 @@ class ManagedAccountsSuite extends CatsEffectSuite:
         coach    <- signUp("coach")
         other    <- signUp("other")
         stranger <- signUp("stranger")
+        viewer   <- signUp("viewer")
         made     <- createIn(coach, NewAccount("Ada"))
         ada = made.toOption.get.head.user
+        _ <- grant(
+          Resource.user(ada.id),
+          viewer,
+          Access.View,
+        )
         club   <- groups.create(other.id, GroupDetails("Club"))
         mine   <- groups.create(coach.id, GroupDetails("Mine"))
         _      <- groups.invite(other.id, club.id, "Ada")
         listed <- service.list(coach)
+        seen   <- service.list(viewer)
         waiting = listed.toOption.get.head.invitations
         refused <- groupService.accept(stranger, waiting.head.id)
         _       <- reported
@@ -332,6 +479,15 @@ class ManagedAccountsSuite extends CatsEffectSuite:
         assertEquals(
           waiting.map(_.group.name),
           List("Club"),
+        )
+        assertEquals(
+          waiting.map(_.inviter),
+          List(Some(other)),
+        )
+        // Who sent it is the answerers' alone.
+        assertEquals(
+          seen.map(_.flatMap(_.invitations.map(_.inviter))),
+          Right(List(None)),
         )
         assertEquals(
           refused,

@@ -3,7 +3,9 @@ package server
 
 import cats.effect.IO
 import cats.syntax.all.*
-import com.alecdorrington.hecate.model.{AuthRefusal, EmailStatus, User}
+import com.alecdorrington.hecate.model.{
+  AuthRefusal, EmailStatus, Gated, PasswordSet, User,
+}
 import java.sql.SQLException
 import scala.util.{Failure, Success}
 
@@ -144,27 +146,38 @@ final class UserStore(tables: AuthTables, db: Transactor):
       token: String,
       expiresAt: Long,
     )
-    : IO[Either[AuthRefusal, User]] = db.run(
-    (for
-      held <- tables.lockUser(user)
-      _    <- refuseUnless(
-        held.exists(_.passwordHash.isEmpty),
-        AuthRefusal.NotGuest,
-      )
-      _ <- byId(user)
-        .map(row => (row.username, row.usernameKey))
-        .update((username, Username.key(username)))
-      _ <- reset(user, passwordHash, token, expiresAt)
-    yield User(user, username))
-      .transactionally
-      .asTry
-      .flatMap:
-        case Success(claimed)              => DBIO.successful(Right(claimed))
-        case Failure(AuthProblem(refusal)) => DBIO.successful(Left(refusal))
-        case Failure(error) if UserStore.violatesConstraint(error) =>
-          DBIO.successful(Left(AuthRefusal.UsernameTaken))
-        case Failure(error) => DBIO.failed(error),
-  )
+    : IO[Either[AuthRefusal, User]] = IO
+    .realTime
+    .flatMap(now =>
+      db.run(
+        (
+          for
+            held <- tables.lockUser(user)
+            _    <- refuseUnless(
+              held.exists(_.passwordHash.isEmpty),
+              AuthRefusal.NotGuest,
+            )
+            _ <- byId(user)
+              .map(row => (row.username, row.usernameKey))
+              .update((username, Username.key(username)))
+            _ <- reset(
+              user,
+              passwordHash,
+              token,
+              expiresAt,
+              now.toMillis,
+            )
+          yield User(user, username)
+        ).transactionally
+          .asTry
+          .flatMap:
+            case Success(claimed) => DBIO.successful(Right(claimed))
+            case Failure(AuthProblem(refusal)) => DBIO.successful(Left(refusal))
+            case Failure(error) if UserStore.violatesConstraint(error) =>
+              DBIO.successful(Left(AuthRefusal.UsernameTaken))
+            case Failure(error) => DBIO.failed(error),
+      ),
+    )
 
   /**
     * Finds a user by username, whatever its letter case.
@@ -288,7 +301,10 @@ final class UserStore(tables: AuthTables, db: Transactor):
           .map(_._2)
           .filterNot(user =>
             tables.suspensions.filter(_.userId === user.id).exists ||
-            tables.temporaryPasswords.filter(_.userId === user.id).exists,
+            tables
+              .passwordsSet
+              .filter(set => set.userId === user.id && set.replacedAt.isEmpty)
+              .exists,
           )
           .result
           .headOption,
@@ -329,8 +345,19 @@ final class UserStore(tables: AuthTables, db: Transactor):
       token: String,
       expiresAt: Long,
     )
-    : IO[Unit] =
-    db.run(reset(user, passwordHash, token, expiresAt).transactionally)
+    : IO[Unit] = IO
+    .realTime
+    .flatMap(now =>
+      db.run(
+        reset(
+          user,
+          passwordHash,
+          token,
+          expiresAt,
+          now.toMillis,
+        ).transactionally,
+      ),
+    )
 
   /**
     * Regains an account with a recovery code, using the code up and resetting
@@ -364,19 +391,24 @@ final class UserStore(tables: AuthTables, db: Transactor):
       token: String,
       expiresAt: Long,
     )
-    : IO[Option[User]] = db.run(
-    byUsername(username)
-      .result
-      .headOption
-      .flatMap(regain(
-        _,
-        codeHash,
-        passwordHash,
-        token,
-        expiresAt,
-      ))
-      .transactionally,
-  )
+    : IO[Option[User]] = IO
+    .realTime
+    .flatMap(now =>
+      db.run(
+        byUsername(username)
+          .result
+          .headOption
+          .flatMap(regain(
+            _,
+            codeHash,
+            passwordHash,
+            token,
+            expiresAt,
+            now.toMillis,
+          ))
+          .transactionally,
+      ),
+    )
 
   private def regain
     (
@@ -385,13 +417,20 @@ final class UserStore(tables: AuthTables, db: Transactor):
       passwordHash: String,
       token: String,
       expiresAt: Long,
+      now: Long,
     )
     : DBIO[Option[User]] = found.fold(DBIO.successful(None))(row =>
     consumeCode(row.id, codeHash).flatMap(used =>
       if used then
         for
           _ <- unlessSuspended(row.id)
-          _ <- reset(row.id, passwordHash, token, expiresAt)
+          _ <- reset(
+            row.id,
+            passwordHash,
+            token,
+            expiresAt,
+            now,
+          )
         yield Some(row.toUser)
       else DBIO.successful(None),
     ),
@@ -594,7 +633,13 @@ final class UserStore(tables: AuthTables, db: Transactor):
     used <- consumeLink(tokenHash, EmailPurpose.Reset, now)
     _    <- used.fold[DBIO[Unit]](DBIO.unit)((_, row) =>
       unlessSuspended(row.id).flatMap(_ =>
-        reset(row.id, passwordHash, token, expiresAt),
+        reset(
+          row.id,
+          passwordHash,
+          token,
+          expiresAt,
+          now,
+        ),
       ),
     )
   yield used.map(_._2.toUser)).transactionally)
@@ -667,7 +712,7 @@ final class UserStore(tables: AuthTables, db: Transactor):
     codesOf(user).delete,
     allLinksOf(user).delete,
     suspension(user).delete,
-    temporary(user).delete,
+    tables.passwordsSet.filter(_.userId === user).delete,
     byId(user).delete,
   )
 
@@ -694,7 +739,40 @@ final class UserStore(tables: AuthTables, db: Transactor):
     *   An effect producing whether it has.
     */
   def temporarilyPassworded(user: Long): IO[Boolean] =
-    db.run(temporary(user).exists.result)
+    db.run(pending(user).exists.result)
+
+  /**
+    * The passwords someone other than a user set for them, newest first, each
+    * with who set it and when the user replaced it.
+    *
+    * @param user
+    *   The identifier of the user.
+    *
+    * @return
+    *   An effect producing the passwords set.
+    */
+  def passwordsSetFor(user: Long): IO[List[PasswordSet]] = db
+    .run(
+      tables
+        .passwordsSet
+        .filter(_.userId === user)
+        .joinLeft(tables.users)
+        .on(_.setterId === _.id)
+        .sortBy((set, _) => (set.setAt.desc, set.id.desc))
+        .result,
+    )
+    .map(
+      _.map((set, setter) =>
+          PasswordSet(
+            setter.fold[Gated[User]](Gated.Absent)(row =>
+              Gated.Shown(row.toUser),
+            ),
+            set.setAt,
+            set.replacedAt,
+          ),
+        )
+        .toList,
+    )
 
   /**
     * The accounts among some users with a password someone else set, in the
@@ -704,8 +782,8 @@ final class UserStore(tables: AuthTables, db: Transactor):
     users.distinct,
   )(Set.empty[Long]): wanted =>
     tables
-      .temporaryPasswords
-      .filter(_.userId inSet wanted)
+      .passwordsSet
+      .filter(set => (set.userId inSet wanted) && set.replacedAt.isEmpty)
       .map(_.userId)
       .result
       .map(_.toSet)
@@ -762,8 +840,7 @@ final class UserStore(tables: AuthTables, db: Transactor):
     byId(user).map(_.passwordHash).update(Some(passwordHash)),
     sessionsOf(user).delete,
     allLinksOf(user).delete,
-    temporary(user).delete,
-    tables.temporaryPasswords += TemporaryPasswordRow(user, setter, at),
+    tables.passwordsSet += PasswordSetRow(0, user, setter, at, None),
   )
 
   /**
@@ -798,8 +875,8 @@ final class UserStore(tables: AuthTables, db: Transactor):
       )
       ids <- tables.users.returning(tables.users.map(_.id)) ++=
         accounts.map((username, hash) => UserRow(0, username, Some(hash), None))
-      _ <- tables.temporaryPasswords ++=
-        ids.map(TemporaryPasswordRow(_, setter, at))
+      _ <- tables.passwordsSet ++=
+        ids.map(PasswordSetRow(0, _, setter, at, None))
     yield ids.zip(accounts).map((id, account) => User(id, account._1))
 
   /** Fails with [[AuthRefusal.Suspended]] if the account is suspended. */
@@ -811,7 +888,8 @@ final class UserStore(tables: AuthTables, db: Transactor):
   /**
     * Sets a password of the user's own, replacing every session with the given
     * one and withdrawing every emailed link, so no old reset or confirmation
-    * link can undo the change.
+    * link can undo the change. Any password someone else set is replaced at the
+    * given time.
     */
   private def reset
     (
@@ -819,12 +897,13 @@ final class UserStore(tables: AuthTables, db: Transactor):
       passwordHash: String,
       token: String,
       expiresAt: Long,
+      at: Long,
     )
     : DBIO[Unit] = DBIO.seq(
     byId(user).map(_.passwordHash).update(Some(passwordHash)),
     sessionsOf(user).delete,
     allLinksOf(user).delete,
-    temporary(user).delete,
+    pending(user).map(_.replacedAt).update(Some(at)),
     tables.sessions += SessionRow(Digest.of(token), user, expiresAt),
   )
 
@@ -870,9 +949,10 @@ final class UserStore(tables: AuthTables, db: Transactor):
 
   private def byId(user: Long) = tables.users.filter(_.id === user)
 
-  private def temporary(user: Long) = tables
-    .temporaryPasswords
-    .filter(_.userId === user)
+  /** The passwords someone else set for a user that they have not replaced. */
+  private def pending(user: Long) = tables
+    .passwordsSet
+    .filter(set => set.userId === user && set.replacedAt.isEmpty)
 
   private def suspension(user: Long) = tables
     .suspensions
