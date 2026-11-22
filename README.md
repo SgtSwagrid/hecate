@@ -291,17 +291,18 @@ which they typed wrongly.
 
 ### Invite links
 
-An invite link is known by a short random code alone (`InviteCode`: five letters or digits,
-at least one a digit so that a code never spells a word, read without regard to case, and never
-chosen by anyone), so that a host can put it anywhere in
-its own URLs, as short as `https://example.com/k3x9q`. It leads either to a group, which
+An invite link is known by a short random code alone (`InviteCode`: six hexadecimal digits,
+at least one of them `0` to `9` so that a code never spells a word, read without regard to case,
+and never chosen by anyone), so that a host can put it anywhere in
+its own URLs, as short as `https://example.com/3F9A2C`. It leads either to a group, which
 following it joins, or to a resource, over which following it grants the access the link
 carries, never lowering any the follower already holds. `LinkApi` shows where a link leads
 (`GET /api/invite-links/{code}`), so that nobody follows one blind, and follows it
 (`POST /api/invite-links/{code}/follow`).
 
 Each group and each resource has at most one link, which its owners may replace with a new
-code, ending the old one, or turn off. A group's managers manage its link through `GroupApi`.
+code, ending the old one, or turn off. A link stored under a code that is no longer valid, as
+one drawn by an earlier release, counts as none: it leads nowhere, and making a link replaces it. A group's managers manage its link through `GroupApi`.
 A resource's owners manage its link through `SharingService` (see *Sharing* below). Tell
 `LinkService` what your resources are called, locking the row, so that a link never grants access
 to something deleted meanwhile:

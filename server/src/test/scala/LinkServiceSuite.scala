@@ -2,13 +2,14 @@ package com.alecdorrington.hecate
 package server
 
 import Fixtures.{cheap, grant}
+import TestDb.tables.profile.api.*
 import cats.effect.IO
 import com.alecdorrington.hecate.model.{
-  Access, AuthRefusal, GroupDetails, LinkTarget, Principal, Resource, User,
+  Access, AuthRefusal, GroupDetails, InviteCode, LinkTarget, Principal,
+  Resource, User,
 }
 import java.util.Locale
 import munit.CatsEffectSuite
-import slick.dbio.DBIO
 
 class LinkServiceSuite extends CatsEffectSuite:
 
@@ -75,6 +76,57 @@ class LinkServiceSuite extends CatsEffectSuite:
             text,
           ),
         )
+
+  test(
+    "a link stored under a code no longer valid is no link, and is replaced",
+  ):
+    served(): world =>
+      val old = "k3x9q"
+      for
+        owner  <- world.signUp("owner")
+        reader <- world.signUp("reader")
+        team   <- world.groups.create(owner.id, GroupDetails("Book club"))
+        _      <- world
+          .db
+          .run(
+            TestDb.tables.inviteLinks += InviteLinkRow.of(
+              old,
+              owner.id,
+              LinkTarget.Joining(team.id),
+            ),
+          )
+        _ <- world
+          .db
+          .run(
+            TestDb.tables.inviteLinks += InviteLinkRow.of(
+              old + "2",
+              owner.id,
+              LinkTarget.Sharing(book, Access.View),
+            ),
+          )
+        followed <- world.service.follow(reader, old)
+        before   <- world.groups.managed(owner.id)
+        shown    <- world.db.run(world.links.over(book))
+        fresh    <- world.groups.link(owner.id, team.id)
+        stored   <- world
+          .db
+          .run(
+            TestDb
+              .tables
+              .inviteLinks
+              .filter(_.groupId === team.id)
+              .map(_.code)
+              .result,
+          )
+      yield
+        assertEquals(
+          followed,
+          Left(AuthRefusal.LinkMissing),
+        )
+        assertEquals(before.map(_.inviteCode), List(None))
+        assertEquals(shown, None)
+        assertEquals(stored, Seq(fresh))
+        assertEquals(InviteCode.parse(fresh), Some(fresh))
 
   test("following a resource's link grants its access, and never lowers any"):
     served(): world =>
@@ -257,7 +309,7 @@ object LinkServiceSuite:
   private val names = Map(book -> "Dune")
 
   private def otherThan(code: String): String =
-    if code == "aaaa1" then "bbbb1" else "aaaa1"
+    if code == "aaaaa1" then "bbbbb1" else "aaaaa1"
 
   private final class World
     (

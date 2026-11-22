@@ -13,7 +13,8 @@ import slick.dbio.DBIO
   *
   * At most one link leads to each group and each resource only while the caller
   * locks the target's row before changing its link, as [[GroupStore]] does for
-  * groups and the host must for resources.
+  * groups and the host must for resources. A link stored under a code that is
+  * no longer valid, as one drawn by an earlier release, counts as no link.
   *
   * @param tables
   *   The tables the links are stored in.
@@ -33,7 +34,7 @@ final class LinkStore(tables: AuthTables):
     */
   def to(target: LinkTarget): DBIO[Option[InviteLinkRow]] = leadingTo(target)
     .result
-    .headOption
+    .map(_.find(row => InviteCode.valid(row.code)))
 
   /**
     * Finds the codes of the links to some groups.
@@ -52,7 +53,12 @@ final class LinkStore(tables: AuthTables):
       .filter(_.groupId inSet shown)
       .map(link => (link.groupId, link.code))
       .result
-      .map(_.collect { case (Some(group), code) => group -> code }.toMap)
+      .map(
+        _.collect {
+            case (Some(group), code) if InviteCode.valid(code) => group -> code
+          }
+          .toMap,
+      )
 
   /**
     * Finds the link leading to a resource, as its owners see it.
@@ -111,7 +117,7 @@ final class LinkStore(tables: AuthTables):
   def ensure(creator: Long, target: LinkTarget): DBIO[String] = to(target)
     .flatMap:
       case Some(row) => regrant(target).map(_ => row.code)
-      case None      => create(creator, target)
+      case None      => renew(creator, target)
 
   /**
     * Replaces a target's link with one of a new code, or makes one.

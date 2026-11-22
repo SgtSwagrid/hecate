@@ -78,17 +78,17 @@ object LinkTarget:
       )
 
 /**
-  * The random code an invite link is known by: five letters or digits, read in
-  * any case. Each holds at least one digit, so that it never spells a word or
-  * collides with a host's own paths (such as `/about`).
+  * The random code an invite link is known by: six hexadecimal digits, read in
+  * any case. Each holds at least one of `0` to `9`, so that it never spells a
+  * word (such as `decade`) or collides with a host's own paths.
   */
 object InviteCode:
 
   /** The number of characters in every code. */
-  val length: Int = 5
+  val length: Int = 6
 
   /** The characters a code may hold, as stored. */
-  val alphabet: String = ('a' to 'z').mkString + ('0' to '9').mkString
+  val alphabet: String = ('0' to '9').mkString + ('a' to 'f').mkString
 
   /**
     * Parses a code from text in any case, lowering letters without regard to
@@ -112,7 +112,7 @@ object InviteCode:
     *   Whether the text is a code.
     */
   def valid(code: String): Boolean = code.length == length &&
-    code.forall(alphabet.contains) && code.exists(_.isDigit)
+    code.forall(alphabet.contains) && code.exists(char => char <= '9')
 
   private def lower(char: Char): Char =
     if char >= 'A' && char <= 'Z' then (char + ('a' - 'A')).toChar else char
