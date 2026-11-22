@@ -1875,7 +1875,7 @@
             <div class="cover">
              <div class="doc">
               <p>A store of invite links, each a code (see <span data-unresolved-link="" title="Problem linking InviteCode: Couldn't resolve a member for the given link query">InviteCode</span>) leading to a group or a resource. Every action composes into the caller's transaction.</p>
-              <p>At most one link leads to each group and each resource only while the caller locks the target's row before changing its link, as <a href="server/GroupStore.html">GroupStore</a> does for groups and the host must for resources.</p>
+              <p>At most one link leads to each group and each resource only while the caller locks the target's row before changing its link, as <a href="server/GroupStore.html">GroupStore</a> does for groups and the host must for resources. A link stored under a code that is no longer valid, as one drawn by an earlier release, counts as no link.</p>
              </div>
              <h2 class="h200">Value parameters</h2>
              <dl class="attributes attributes-small">
