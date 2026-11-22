@@ -46,7 +46,14 @@ for full stack websites built on Slick, Cats Effect and Laminar, and optionally 
   singleton case is made before its companion's strings are set, so `Principal.systemKind` would be
   null there. Groups are joined by invitation (which records who sent it), by a request a manager
   admits (only of a group the asker can see: public, or nested in one they belong to), or by an
-  invite link; `LinkStore`/`LinkService` keep one link
+  invite link. A group may also be a *member* of other groups (`group_member_groups`), apart from
+  its nesting: invited by a manager of the other (`inviteGroup`, only a group the inviter can see,
+  `group_group_invitations`), accepted by whoever may `Edit` it, ended by either side's managers.
+  Every walk upwards (`enclosure`) or downwards (`within`) follows both nesting and membership,
+  so principals, grants and `membersWithin` all count member groups, and `ensureOutside` keeps
+  any group from being within itself either way; `descendants`/`ancestry` stay nesting alone, for
+  what is about the tree itself (joinable groups, deletion, the path shown). `invite` answers an
+  `Offer` with its `InviteStatus`; `LinkStore`/`LinkService` keep one link
   per group or resource, each a random `InviteCode` (six hexadecimal digits, any case, always one of 0-9; a stored code
   no longer valid counts as no link, and `ensure` replaces it), and a link
   to a resource grants its level through `GrantStore.raise`, under the row lock the host's `resources` hook takes.

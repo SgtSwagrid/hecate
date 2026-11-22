@@ -114,6 +114,26 @@ final class GroupEndpoints
     user => invitation => groups.decline(user, invitation),
   )
 
+  /** The server endpoint for [[GroupApi.removeGroup]]. */
+  lazy val removeGroup: ServerEndpoint[Any, IO] = auth.served(
+    GroupApi.removeGroup,
+  )(user => (group, member) => groups.removeGroup(user, group, member))
+
+  /** The server endpoint for [[GroupApi.groupInvitations]]. */
+  lazy val groupInvitations: ServerEndpoint[Any, IO] = auth.served(
+    GroupApi.groupInvitations,
+  )(user => _ => groups.groupInvitations(user))
+
+  /** The server endpoint for [[GroupApi.acceptGroup]]. */
+  lazy val acceptGroup: ServerEndpoint[Any, IO] = auth.served(
+    GroupApi.acceptGroup,
+  )(user => invitation => groups.acceptGroup(user, invitation))
+
+  /** The server endpoint for [[GroupApi.declineGroup]]. */
+  lazy val declineGroup: ServerEndpoint[Any, IO] = auth.served(
+    GroupApi.declineGroup,
+  )(user => invitation => groups.declineGroup(user, invitation))
+
   /** The endpoints to serve. */
   lazy val api: List[ServerEndpoint[Any, IO]] = List(
     list,
@@ -137,4 +157,8 @@ final class GroupEndpoints
     invitations,
     accept,
     decline,
+    removeGroup,
+    groupInvitations,
+    acceptGroup,
+    declineGroup,
   )

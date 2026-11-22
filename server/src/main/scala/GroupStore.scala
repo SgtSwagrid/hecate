@@ -3,9 +3,9 @@ package server
 
 import cats.effect.IO
 import com.alecdorrington.hecate.model.{
-  Access, AuthRefusal, Grant, Group, GroupDetails, Holder, Invitation,
-  JoinableGroup, LinkTarget, ManagedGroup, Manager, Membership, Principal,
-  Resource, User,
+  Access, AuthRefusal, Grant, Group, GroupDetails, GroupInvitation, Holder,
+  Invitation, InviteStatus, JoinableGroup, LinkTarget, ManagedGroup, Manager,
+  Membership, Principal, Resource, User,
 }
 import slick.dbio.DBIO
 
@@ -23,8 +23,14 @@ import slick.dbio.DBIO
   * their own and a manager's agreement: by accepting an invitation, by having a
   * request admitted, or by following an invite link. A request may only be made
   * of a group the asker can see, a public one or one nested inside a group they
-  * are a member of; any other is reported as missing. A group never contains
-  * itself, and every walk of the tree visits each group once.
+  * are a member of; any other is reported as missing.
+  *
+  * A group may also be a member of other groups, apart from where it is nested:
+  * invited by someone who may change the group it would join, it joins once
+  * someone who may change it accepts, or at once if the inviter may change
+  * both. Either side's managers may end it. A group's members belong to every
+  * group enclosing it, through nesting or as a member, and no group is ever
+  * within itself either way; every walk visits each group once.
   *
   * Every change to a group's members, invitations, requests or invite link
   * first locks the group's row, as its check-then-insert races under
@@ -86,6 +92,19 @@ final class GroupStore
   private val requestPairs: Pairs = tables
     .requests
     .map(row => (row.groupId, row.userId))
+
+  private val memberGroupPairs: Pairs = tables
+    .memberGroups
+    .map(row => (row.groupId, row.memberId))
+
+  // Each member group paired with the group it is a member of.
+  private val memberOfPairs: Pairs = tables
+    .memberGroups
+    .map(row => (row.memberId, row.groupId))
+
+  private val groupInvitationPairs: Pairs = tables
+    .groupInvitations
+    .map(row => (row.groupId, row.inviteeId))
 
   /**
     * The lookup of a resource's name that locks its row: a group's or an
@@ -155,8 +174,9 @@ final class GroupStore
 
   /**
     * Lists the groups a user manages, holding at least [[Access.View]] over
-    * them, each with their access, direct members, invitees, applicants and,
-    * for those they may change, invite link.
+    * them, each with their access, direct members, invitees, applicants, member
+    * groups, groups invited, the groups it is a member of and, for those they
+    * may change, invite link.
     *
     * @param user
     *   The identifier of the user.
@@ -174,6 +194,9 @@ final class GroupStore
       invited    <- usersIn(invitationPairs, ids)
       applicants <- usersIn(requestPairs, ids)
       codes      <- links.toGroups(ids)
+      joined     <- groupsIn(memberGroupPairs, ids)
+      asked      <- groupsIn(groupInvitationPairs, ids)
+      within     <- groupsIn(memberOfPairs, ids)
     yield groups
       .map(group =>
         val access = levels(group.id)
@@ -184,9 +207,27 @@ final class GroupStore
           invited.getOrElse(group.id, List.empty),
           applicants.getOrElse(group.id, List.empty),
           codes.get(group.id).filter(_ => access.includes(Access.Edit)),
+          joined.getOrElse(group.id, List.empty),
+          asked.getOrElse(group.id, List.empty),
+          within.getOrElse(group.id, List.empty),
         ),
       )
       .toList
+
+  /**
+    * The groups each of some groups is paired with, by name, each with its
+    * parent withheld; groups with none are absent.
+    */
+  private def groupsIn
+    (pairs: Pairs, groups: Seq[Long])
+    : DBIO[Map[Long, List[Group]]] = ifAny(groups)(Map.empty): shown =>
+    pairs
+      .filter(_._1 inSet shown)
+      .join(tables.groups)
+      .on(_._2 === _.id)
+      .map((pair, group) => (pair._1, group))
+      .result
+      .map(GroupStore.groupsBy)
 
   /** The rows of some groups, in ascending order. */
   private def rowsOf(groups: Seq[Long]): DBIO[Seq[GroupRow]] =
@@ -215,6 +256,7 @@ final class GroupStore
       named <- rowsOf(ids.flatMap(GroupStore.above(_, parents)).distinct).map(
         _.map(row => row.id -> row).toMap,
       )
+      within <- groupsIn(memberOfPairs, ids)
     yield joined
       .map(group =>
         Membership(
@@ -226,6 +268,7 @@ final class GroupStore
             .reverse
             .flatMap(named.get)
             .map(_.toGroup),
+          within.getOrElse(group.id, List.empty),
         ),
       )
       .toList
@@ -412,9 +455,10 @@ final class GroupStore
 
   /**
     * Lists every group a user effectively belongs to: their memberships plus
-    * every ancestor of those. Membership propagates upwards only, so anything
-    * addressed to a group reaches the members of the groups nested in it, and
-    * never the reverse. Invitations and requests count for nothing.
+    * every group enclosing those, through nesting or as a member. Membership
+    * propagates upwards only, so anything addressed to a group reaches the
+    * members of the groups within it, and never the reverse. Invitations and
+    * requests count for nothing.
     *
     * @param user
     *   The identifier of the user.
@@ -424,11 +468,51 @@ final class GroupStore
     */
   def enclosing(user: Long): IO[List[Long]] = db.run(enclosingAt(user))
 
-  private def enclosingAt(user: Long): DBIO[List[Long]] =
-    for
-      direct  <- directOf(user)
-      parents <- ancestry(direct)
-    yield GroupStore.withAncestors(direct, parents)
+  private def enclosingAt(user: Long): DBIO[List[Long]] = directOf(user)
+    .flatMap(enclosure)
+    .map(_.toList.sorted)
+
+  /**
+    * The groups with every group enclosing them, through nesting or as a
+    * member, climbing one level per query and asking for each group once, so
+    * that a cycle ends.
+    */
+  private def enclosure(groups: Seq[Long]): DBIO[Set[Long]] =
+    def climb(frontier: Set[Long], seen: Set[Long]): DBIO[Set[Long]] = ifAny(
+      frontier.toSeq,
+    )(seen): asked =>
+      for
+        parents <- tables.groups.filter(_.id inSet asked).map(_.parentId).result
+        joined  <- tables
+          .memberGroups
+          .filter(_.memberId inSet asked)
+          .map(_.groupId)
+          .result
+        fresh = (parents.flatten ++ joined).toSet -- seen
+        found <- climb(fresh, seen ++ fresh)
+      yield found
+    climb(groups.toSet, groups.toSet)
+
+  /**
+    * The groups with every group within them, nested or as a member, descending
+    * one level per query and visiting each group once.
+    */
+  private def within(groups: Seq[Long]): DBIO[Set[Long]] =
+    def descend(frontier: Set[Long], seen: Set[Long]): DBIO[Set[Long]] = ifAny(
+      frontier.toSeq,
+    )(seen): outer =>
+      for
+        children <-
+          tables.groups.filter(_.parentId inSet outer).map(_.id).result
+        members <- tables
+          .memberGroups
+          .filter(_.groupId inSet outer)
+          .map(_.memberId)
+          .result
+        fresh = (children ++ members).toSet -- seen
+        found <- descend(fresh, seen ++ fresh)
+      yield found
+    descend(groups.toSet, groups.toSet)
 
   /**
     * Every given group and each of its ancestors mapped to its parent, climbing
@@ -471,8 +555,8 @@ final class GroupStore
     descend(groups.toSet, groups.toSet)
 
   /**
-    * Lists every member of some groups or of any group nested inside them: the
-    * reverse of [[enclosing]].
+    * Lists every member of some groups or of any group within them, nested or
+    * as a member: the reverse of [[enclosing]].
     *
     * @param groups
     *   The identifiers of the groups.
@@ -488,10 +572,10 @@ final class GroupStore
   private[server] def membersBeneath(groups: Seq[Long]): DBIO[List[Long]] =
     ifAny(groups)(List.empty[Long]): some =>
       for
-        within  <- descendants(some)
+        reached <- within(some)
         members <- tables
           .members
-          .filter(_.groupId inSet within)
+          .filter(_.groupId inSet reached)
           .map(_.userId)
           .distinct
           .sortBy(identity)
@@ -753,8 +837,297 @@ final class GroupStore
           found,
           AuthRefusal.UserMissing(username),
         )
-        sent <- offer(user, group, invitee.id)
-      yield Offer(invitee.toUser, sent)
+        offered <- offer(user, group, invitee.id)
+      yield Offer(
+        Holder(
+          Principal.Person(invitee.id),
+          Some(invitee.username),
+        ),
+        offered._1,
+        offered._2,
+      )
+
+  /**
+    * Invites a group to become a member of another, so that its members, and
+    * those of every group within it, belong to the other through it. Only a
+    * group the user can see may be invited: one they manage, belong to, or may
+    * ask to join; any other is missing. Inviting a member group or one invited
+    * changes nothing, and inviting a group the user may change joins it at
+    * once. A group within the other already, nested or as a member, would be
+    * within itself, and is refused.
+    *
+    * @param user
+    *   The identifier of a user who may change the group invited to.
+    *
+    * @param group
+    *   The identifier of the group invited to.
+    *
+    * @param invitee
+    *   The identifier of the group invited.
+    *
+    * @return
+    *   An effect producing the group invited and the invitation sent, if any.
+    */
+  def inviteGroup(user: Long, group: Long, invitee: Long): IO[Offer] = holding(
+    Seq(group, invitee),
+  ): held =>
+    for
+      _   <- ensureLevel(held, user, group, Access.Edit)
+      row <- required(
+        held.find(_.id == invitee),
+        AuthRefusal.GroupMissing,
+      )
+      seen    <- mayName(user, row)
+      _       <- refuseUnless(seen, AuthRefusal.GroupMissing)
+      _       <- ensureOutside(group, invitee)
+      offered <- offerGroup(user, group, invitee)
+    yield Offer(
+      Holder(
+        Principal.Group(invitee),
+        Some(row.name),
+      ),
+      offered._1,
+      offered._2,
+    )
+
+  /**
+    * Whether a user can see a group well enough to invite it: they hold some
+    * access over it, or may ask to join it ([[maySee]]).
+    */
+  private def mayName(user: Long, group: GroupRow): DBIO[Boolean] =
+    levelAt(user, group.id).flatMap(level =>
+      if level.isDefined then DBIO.successful(true) else maySee(user, group),
+    )
+
+  /**
+    * Refuses to make a group a member of another it encloses already, or of
+    * itself.
+    */
+  private def ensureOutside(group: Long, member: Long): DBIO[Unit] =
+    within(Seq(member)).flatMap(inside =>
+      refuseUnless(
+        !inside(group),
+        AuthRefusal.GroupInsideItself,
+      ),
+    )
+
+  /**
+    * Invites a group unless it is a member or invited, or makes it a member if
+    * the inviter may change it, yielding the invitation sent, if any. Callers
+    * must hold both groups' locks.
+    */
+  private def offerGroup
+    (inviter: Long, group: Long, invitee: Long)
+    : DBIO[(Option[Long], InviteStatus)] =
+    for
+      present <- memberGroupOf(group, invitee).exists.result
+      invited <- groupInvitationTo(group, invitee).exists.result
+      level   <- levelAt(inviter, invitee)
+      agreed = level.exists(_.includes(Access.Edit))
+      result <-
+        if present then DBIO.successful((None, InviteStatus.Member))
+        else if agreed then
+          admitGroup(group, invitee).map(_ => (None, InviteStatus.Joined))
+        else if invited then DBIO.successful((None, InviteStatus.Invited))
+        else
+          (tables
+            .groupInvitations
+            .returning(tables.groupInvitations.map(_.id)) +=
+            GroupInvitationRow(0, group, invitee, inviter)).map(id =>
+            (Some(id), InviteStatus.Invited),
+          )
+    yield result
+
+  /**
+    * Makes a group a member of another, settling any invitation that brought
+    * it. Callers must hold both groups' locks.
+    */
+  private def admitGroup(group: Long, member: Long): DBIO[Unit] =
+    for
+      _ <- groupInvitationTo(group, member).delete
+      _ <- insertUnless(memberGroupOf(group, member).exists)(
+        tables.memberGroups += MemberGroupRow(group, member),
+      )
+    yield ()
+
+  /**
+    * Lists the pending invitations sent to groups a user may change,
+    * withholding each group's parent.
+    *
+    * @param user
+    *   The identifier of the user.
+    *
+    * @return
+    *   An effect producing the invitations in order of sending, each with the
+    *   group invited to, the group invited and whoever sent it.
+    */
+  def groupInvitations(user: Long): IO[List[GroupInvitation]] = db.run:
+    for
+      principals <- principalsAt(user)
+      editable   <- grants.accessibleAt(
+        principals,
+        Resource.groupKind,
+        Access.Edit,
+      )
+      rows <- ifAny(editable.toSeq)(Seq.empty): answerable =>
+        tables
+          .groupInvitations
+          .filter(_.inviteeId inSet answerable)
+          .join(tables.groups)
+          .on(_.groupId === _.id)
+          .join(tables.groups)
+          .on(_._1.inviteeId === _.id)
+          .joinLeft(tables.users)
+          .on(_._1._1.inviterId === _.id)
+          .sortBy(_._1._1._1.id)
+          .result
+    yield rows
+      .map { case (((invitation, group), invitee), inviter) =>
+        GroupInvitation(
+          invitation.id,
+          Group(group.id, group.name),
+          Group(invitee.id, invitee.name),
+          inviter.map(_.toUser),
+        )
+      }
+      .toList
+
+  /**
+    * Accepts an invitation for a group to become a member of another, for
+    * anyone who may change the group invited. To anyone else it is missing. A
+    * group that came to enclose the other meanwhile is refused, and stays
+    * invited.
+    *
+    * @param user
+    *   The identifier of someone who may change the group invited.
+    *
+    * @param invitation
+    *   The identifier of the invitation.
+    */
+  def acceptGroup(user: Long, invitation: Long): IO[Unit] = db.run((for
+    row <- groupAnswerableAt(user, invitation)
+    _   <- lock(Seq(row.groupId, row.inviteeId))
+    // Deleted under the locks, which both rechecks and claims the invitation.
+    taken <- tables.groupInvitations.filter(_.id === invitation).delete
+    _     <- refuseUnless(
+      taken == 1,
+      AuthRefusal.InvitationMissing,
+    )
+    _ <- ensureOutside(row.groupId, row.inviteeId)
+    _ <- admitGroup(row.groupId, row.inviteeId)
+  yield ()).transactionally)
+
+  /**
+    * Declines an invitation for a group to become a member of another, deleting
+    * it. Whoever may accept it may decline it.
+    *
+    * @param user
+    *   The identifier of someone who may change the group invited.
+    *
+    * @param invitation
+    *   The identifier of the invitation.
+    */
+  def declineGroup(user: Long, invitation: Long): IO[Unit] = db.run((for
+    _       <- groupAnswerableAt(user, invitation)
+    removed <- tables.groupInvitations.filter(_.id === invitation).delete
+    _       <- refuseUnless(
+      removed == 1,
+      AuthRefusal.InvitationMissing,
+    )
+  yield ()).transactionally)
+
+  /**
+    * The invitation for a group, if the user may change the group invited.
+    * Missing otherwise.
+    */
+  private def groupAnswerableAt
+    (user: Long, invitation: Long)
+    : DBIO[GroupInvitationRow] = tables
+    .groupInvitations
+    .filter(_.id === invitation)
+    .result
+    .headOption
+    .flatMap(required(_, AuthRefusal.InvitationMissing))
+    .flatMap(row =>
+      levelAt(user, row.inviteeId).flatMap(level =>
+        if level.exists(_.includes(Access.Edit)) then DBIO.successful(row)
+        else DBIO.failed(AuthProblem(AuthRefusal.InvitationMissing)),
+      ),
+    )
+
+  /**
+    * The group an invitation for a group is to and the group invited, if the
+    * user may answer it (see [[acceptGroup]]), or `None`.
+    */
+  private[server] def groupAnswerable
+    (user: Long, invitation: Long)
+    : IO[Option[(Long, Long)]] = db
+    .run(groupAnswerableAt(user, invitation).asTry)
+    .map(_.toOption.map(row => (row.groupId, row.inviteeId)))
+
+  /**
+    * Takes a group out of another, or withdraws its invitation to it, for
+    * whoever may change either group: the one it is in, or the group itself,
+    * leaving. Does nothing if it is neither a member nor invited.
+    *
+    * @param user
+    *   The identifier of someone who may change either group.
+    *
+    * @param group
+    *   The identifier of the group it is a member of or invited to.
+    *
+    * @param member
+    *   The identifier of the member group.
+    */
+  def removeGroup(user: Long, group: Long, member: Long): IO[Unit] = holding(
+    Seq(group, member),
+  ): held =>
+    for
+      here  <- levelAt(user, group)
+      there <- levelAt(user, member)
+      _     <- refuseUnless(
+        held.exists(_.id == group) && (here ++ there).exists(_.includes(
+          Access.Edit,
+        )),
+        AuthRefusal.GroupMissing,
+      )
+      _ <- memberGroupOf(group, member).delete
+      _ <- groupInvitationTo(group, member).delete
+    yield ()
+
+  /**
+    * Whoever may change a group, and so answer the invitations sent to it.
+    *
+    * @param group
+    *   The identifier of the group.
+    *
+    * @return
+    *   An effect producing the users' identifiers.
+    */
+  private[server] def answerersFor(group: Long): IO[Set[Long]] = db.run:
+    grants
+      .grantedAt(
+        Resource.groupKind,
+        Seq(group),
+        Access.Edit,
+      )
+      .flatMap(holding => usersOf(holding.map(_.principal).distinct))
+
+  /**
+    * Whom a change to a group's membership in another concerns: everyone who
+    * sees anything of either, and everyone within the member group, who now
+    * belongs to the other or no longer does.
+    */
+  private[server] def memberGroupsChanged
+    (group: Long, member: Long)
+    : IO[Affected] =
+    for
+      around  <- surroundings(Seq(group, member))
+      reached <- db.run(membersBeneath(Seq(member)))
+    yield Affected.Groups(
+      Audience.People(around.people ++ reached),
+      around.enclosing,
+    )
 
   /**
     * Accepts an invitation, making its invitee a member of the group. Anyone
@@ -1011,11 +1384,10 @@ final class GroupStore
     for
       rows <- rowsOf(groups.distinct)
       ids = rows.map(_.id)
-      holding  <- grants.grantedAt(Resource.groupKind, ids, Access.View)
-      managers <- usersOf(holding.map(_.principal).distinct)
-      parents  <- ancestry(ids)
-      enclosing = GroupStore.withAncestors(ids, parents)
-      enrolled   <- pairsIn(memberPairs, enclosing)
+      holding    <- grants.grantedAt(Resource.groupKind, ids, Access.View)
+      managers   <- usersOf(holding.map(_.principal).distinct)
+      enclosing  <- enclosure(ids)
+      enrolled   <- pairsIn(memberPairs, enclosing.toSeq)
       invitees   <- pairsIn(invitationPairs, ids)
       applicants <- pairsIn(requestPairs, ids)
       direct = ids.toSet
@@ -1201,6 +1573,14 @@ final class GroupStore
         _ <- tables.members.filter(_.groupId inSet gone).delete
         _ <- tables.invitations.filter(_.groupId inSet gone).delete
         _ <- tables.requests.filter(_.groupId inSet gone).delete
+        _ <- tables
+          .memberGroups
+          .filter(row => (row.groupId inSet gone) || (row.memberId inSet gone))
+          .delete
+        _ <- tables
+          .groupInvitations
+          .filter(row => (row.groupId inSet gone) || (row.inviteeId inSet gone))
+          .delete
         _ <- links.deleteToGroups(gone)
         _ <- grants.revokeHeldBy(principals)
         _ <-
@@ -1355,6 +1735,14 @@ final class GroupStore
     .requests
     .filter(asking => asking.groupId === group && asking.userId === user)
 
+  private def memberGroupOf(group: Long, member: Long) = tables
+    .memberGroups
+    .filter(row => row.groupId === group && row.memberId === member)
+
+  private def groupInvitationTo(group: Long, invitee: Long) = tables
+    .groupInvitations
+    .filter(row => row.groupId === group && row.inviteeId === invitee)
+
   private def invitationOf(user: Long, id: Long) = tables
     .invitations
     .filter(invite => invite.id === id && invite.userId === user)
@@ -1415,14 +1803,7 @@ final class GroupStore
   )
 
   private def ensureAcyclic(id: Long, parent: Option[Long]): DBIO[Unit] = parent
-    .fold[DBIO[Unit]](DBIO.unit)(target =>
-      descendants(Seq(id)).flatMap(subtree =>
-        refuseUnless(
-          !subtree(target),
-          AuthRefusal.GroupInsideItself,
-        ),
-      ),
-    )
+    .fold[DBIO[Unit]](DBIO.unit)(ensureOutside(_, id))
 
   /**
     * Invites a user unless they are a member or invitee, or enrols them if the
@@ -1432,21 +1813,23 @@ final class GroupStore
     */
   private def offer
     (inviter: Long, group: Long, user: Long)
-    : DBIO[Option[Long]] = consentsFor(inviter, user).flatMap(agreed =>
-    if agreed then enrol(group, user).map(_ => None)
-    else
-      memberOf(group, user)
-        .exists
-        .result
-        .zip(invitationTo(group, user).exists.result)
-        .zip(requestFrom(group, user).exists.result)
-        .flatMap:
-          case ((false, false), false) =>
-            (tables.invitations.returning(tables.invitations.map(_.id)) +=
-              InvitationRow(0, group, user, inviter)).map(Some(_))
-          case ((false, _), true) => enrol(group, user).map(_ => None)
-          case _                  => DBIO.successful(None),
-  )
+    : DBIO[(Option[Long], InviteStatus)] =
+    for
+      agreed  <- consentsFor(inviter, user)
+      present <- memberOf(group, user).exists.result
+      invited <- invitationTo(group, user).exists.result
+      asked   <- requestFrom(group, user).exists.result
+      result  <-
+        if present then DBIO.successful((None, InviteStatus.Member))
+        else if agreed || asked then
+          enrol(group, user).map(_ => (None, InviteStatus.Joined))
+        else if invited then DBIO.successful((None, InviteStatus.Invited))
+        else
+          (tables.invitations.returning(tables.invitations.map(_.id)) +=
+            InvitationRow(0, group, user, inviter)).map(id =>
+            (Some(id), InviteStatus.Invited),
+          )
+    yield result
 
   /**
     * Records a request to join a group the user can see, unless they are a
@@ -1563,6 +1946,13 @@ object GroupStore:
         Audience.People(managers ++ members ++ accountManagers + person),
         enclosing,
       )
+
+  private def groupsBy(pairs: Seq[(Long, GroupRow)]): Map[Long, List[Group]] =
+    pairs
+      .groupMap(_._1)(pair => Group(pair._2.id, pair._2.name))
+      .view
+      .mapValues(_.sortBy(_.name).toList)
+      .toMap
 
   private def byGroup(pairs: Seq[(Long, UserRow)]): Map[Long, List[User]] =
     pairs

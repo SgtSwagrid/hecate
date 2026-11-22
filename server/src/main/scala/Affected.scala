@@ -7,8 +7,9 @@ import com.alecdorrington.hecate.model.Resource
   * A report of whom a committed change concerns, for the host to notify. It
   * says nothing of what changed: whoever is told should ask again through the
   * endpoints that check what they may see, so a notice discloses nothing. The
-  * exceptions, [[Affected.Invited]] and [[Affected.PasswordSet]], say what
-  * happened for a host that tells the person it happened to.
+  * exceptions, [[Affected.Invited]], [[Affected.GroupInvited]] and
+  * [[Affected.PasswordSet]], say what happened for a host that tells the people
+  * it happened to.
   */
 enum Affected:
 
@@ -43,6 +44,30 @@ enum Affected:
       invitation: Long,
       group: Long,
       invitee: Long,
+    )
+
+  /**
+    * An invitation sent for a group to become a member of another, reported
+    * beside the change to both groups.
+    *
+    * @param invitation
+    *   The identifier of the invitation.
+    *
+    * @param group
+    *   The identifier of the group invited to.
+    *
+    * @param invitee
+    *   The identifier of the group invited.
+    *
+    * @param answerers
+    *   Everyone who may answer it: whoever may change the group invited.
+    */
+  case GroupInvited
+    (
+      invitation: Long,
+      group: Long,
+      invitee: Long,
+      answerers: Set[Long],
     )
 
   /**

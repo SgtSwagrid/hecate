@@ -130,6 +130,58 @@ final class AuthTables
 
     override def * = (id, groupId, userId, inviterId).mapTo[InvitationRow]
 
+  /**
+    * A table of groups that are members of other groups, with the columns of
+    * [[MemberGroupRow]].
+    */
+  final class MemberGroups
+    (tag: Tag)
+    extends Table[MemberGroupRow](tag, s"${ prefix }group_member_groups"):
+
+    def groupId  = column[Long]("group_id")
+    def memberId = column[Long]("member_id")
+
+    def byGroup = index(
+      s"${ prefix }group_member_groups_group",
+      (groupId, memberId),
+    )
+
+    def byMember = index(
+      s"${ prefix }group_member_groups_member",
+      memberId,
+    )
+
+    override def * = (groupId, memberId).mapTo[MemberGroupRow]
+
+  /**
+    * A table of invitations for groups to become members of other groups, with
+    * the columns of [[GroupInvitationRow]].
+    */
+  final class GroupInvitations
+    (tag: Tag)
+    extends Table[GroupInvitationRow](
+      tag,
+      s"${ prefix }group_group_invitations",
+    ):
+
+    def id        = column[Long]("id", O.PrimaryKey, O.AutoInc)
+    def groupId   = column[Long]("group_id")
+    def inviteeId = column[Long]("invitee_id")
+    def inviterId = column[Long]("inviter_id")
+
+    def byGroup = index(
+      s"${ prefix }group_group_invitations_group",
+      (groupId, inviteeId),
+    )
+
+    def byInvitee = index(
+      s"${ prefix }group_group_invitations_invitee",
+      inviteeId,
+    )
+
+    override def * =
+      (id, groupId, inviteeId, inviterId).mapTo[GroupInvitationRow]
+
   /** A table of requests to join a group, with the columns of [[RequestRow]]. */
   final class Requests
     (tag: Tag)
@@ -330,6 +382,12 @@ final class AuthTables
   /** The table of group invitations. */
   val invitations = TableQuery[Invitations]
 
+  /** The table of groups that are members of other groups. */
+  val memberGroups = TableQuery[MemberGroups]
+
+  /** The table of invitations for groups to join other groups. */
+  val groupInvitations = TableQuery[GroupInvitations]
+
   /** The table of requests to join a group. */
   val requests = TableQuery[Requests]
 
@@ -418,6 +476,8 @@ final class AuthTables
     sentMails,
     suspensions,
     passwordsSet,
+    memberGroups,
+    groupInvitations,
   )
 
 /**
@@ -528,6 +588,42 @@ final case class InvitationRow
     id: Long,
     groupId: Long,
     userId: Long,
+    inviterId: Long,
+  )
+
+/**
+  * A stored membership of one group in another, at most one per pair, whose
+  * members belong to the other through it.
+  *
+  * @param groupId
+  *   The identifier of the group it is a member of.
+  *
+  * @param memberId
+  *   The identifier of the member group.
+  */
+final case class MemberGroupRow(groupId: Long, memberId: Long)
+
+/**
+  * A stored pending invitation for a group to become a member of another, at
+  * most one per pair, deleted once accepted or declined.
+  *
+  * @param id
+  *   The identifier, assigned by the database.
+  *
+  * @param groupId
+  *   The identifier of the group invited to.
+  *
+  * @param inviteeId
+  *   The identifier of the group invited.
+  *
+  * @param inviterId
+  *   The identifier of the user who sent the invitation.
+  */
+final case class GroupInvitationRow
+  (
+    id: Long,
+    groupId: Long,
+    inviteeId: Long,
     inviterId: Long,
   )
 

@@ -210,9 +210,10 @@ name, or the system) and one another (`GET /api/groups/mine`, a `Membership` eac
 groups enclosing it, which they belong to through it, without their members), but not who
 is invited to it or asking to join; anyone else sees a group only by name, and only if they are invited to it or may ask
 to join it (see *Joining a group* below). Membership propagates *upwards*: a member of a
-group is effectively a member of every group it is nested inside, so anything addressed
-to a department also reaches the members of each team within it. `GroupStore.enclosing`
-returns exactly that set, and is the intended basis for "what may this user see?".
+group is effectively a member of every group enclosing it, whether it is nested inside them
+or a member of them (see *Groups as members* below), so anything addressed to a department
+also reaches the members of each team within it. `GroupStore.enclosing` returns exactly that
+set, and is the intended basis for "what may this user see?".
 
 Deleting a group deletes every group beneath it that its deleter owns too; any other group nested
 inside it moves up to the nearest group that remains. To delete whatever your application
@@ -288,6 +289,33 @@ duplicate a row. The lock is skipped on SQLite, which admits one writer at a tim
 Inviting a username that does not exist is reported as such. That discloses whether an
 account exists, and is a deliberate trade so that someone inviting a list of names knows
 which they typed wrongly.
+
+`POST /api/groups/{group}/invitations` takes an `Invitee` (a person by username, or a group by
+id) and answers an `InviteResult`: whom it invited, by name, and its `InviteStatus`, `Invited`
+(an invitation awaits them), `Joined` (in at once) or `Member` (already in, nothing changed), so
+that the inviter can be told which.
+
+### Groups as members
+
+A group may also be a *member* of other groups, apart from where it is nested: a team nested
+in its department may be a member of a club as well. Its members, and those of every group within
+it, then belong to the other group through it, as they would were it nested there. A group joins
+as a person does, with both sides agreeing:
+
+- A manager of the other group invites it (`Invitee.Group(id)`), naming only a group they can
+  see: one they hold some access over, belong to, or may ask to join. Inviting a group they may
+  change too joins it at once.
+- Anyone who may change the invited group (`Edit`) accepts or declines it
+  (`GET /api/group-invitations`, a `GroupInvitation` each, and `POST
+  /api/group-invitations/{id}/accept` or `/decline`).
+- The managers of either group may end it (`DELETE /api/groups/{group}/member-groups/{member}`),
+  which also withdraws a pending invitation.
+
+`ManagedGroup` lists a group's `memberGroups`, `invitedGroups` and the groups it is a member of
+(`memberOf`), and `Membership` the latter too, all by name alone: the other group's managers see
+that the group is in theirs, not who is in it. No group is ever within itself, nested or as a
+member, so an invitation or a move that would put one inside itself is refused
+(`GroupInsideItself`), and deleting a group ends its memberships and invitations either way.
 
 ### Invite links
 
@@ -540,7 +568,7 @@ permissions.access(user, Resource("document", id))       // The highest access r
 permissions.accessible(user, "document", Access.View) // Every document they may see.
 ```
 
-A grant to a group reaches every member of it and of every group nested inside it, but never
+A grant to a group reaches every member of it and of every group within it, but never
 the other way round, and a grant to the system reaches every operator. `GrantStore`'s writes are returned as actions rather than run, so that
 they can join the transaction that creates or deletes the resource; lock the resource's own
 row before granting or revoking, as nothing else can.
@@ -590,6 +618,8 @@ GroupService(groups, affected = {
   case Affected.Groups(Audience.People(ids), _) => tellEach(ids)
   case Affected.Groups(Audience.Everyone, _)    => tellEveryone
   case Affected.Invited(invitation, _, invitee) => alert(invitee, invitation)
+  case Affected.GroupInvited(invitation, _, _, answerers) =>
+    answerers.foreach(alert(_, invitation))
   case Affected.Grants(resource, formerly)      => tellWhoeverSees(resource, formerly)
   case Affected.Account(user)                   => tellEach(Set(user))
 })
@@ -599,6 +629,9 @@ GroupService(groups, affected = {
 change to the group's members, for a host that tells people they were invited (with a
 notification, say). It is reported only when an invitation is made, never when inviting someone
 already invited or a member changes nothing, or enrols the inviter or an applicant at once.
+`Affected.GroupInvited` is its counterpart for a group invited, naming everyone who may answer it.
+A change to a group's membership in another concerns everyone who sees anything of either, and
+everyone within the member group, who now belongs to the other or no longer does.
 
 A change to who is in a group, invited to it or asking to join it concerns the group's managers, its
 members, who see one another, and that person; a change to the group itself (its name, nesting, visibility or existence)

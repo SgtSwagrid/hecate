@@ -5,8 +5,8 @@ import cats.effect.IO
 import cats.effect.std.Console
 import cats.syntax.all.*
 import com.alecdorrington.hecate.model.{
-  Group, GroupDetails, Invitation, Invitee, JoinableGroup, ManagedGroup,
-  Membership, Principal, User,
+  Group, GroupDetails, GroupInvitation, Invitation, Invitee, InviteResult,
+  JoinableGroup, ManagedGroup, Membership, Principal, User,
 }
 
 /**
@@ -248,8 +248,9 @@ final class GroupService
     )
 
   /**
-    * Invites a user, named by username, to a group, reporting the invitation
-    * sent as [[Affected.Invited]] beside the change to the group.
+    * Invites a person, named by username, or a group to a group, reporting the
+    * invitation sent as [[Affected.Invited]] or [[Affected.GroupInvited]]
+    * beside the change to the groups.
     *
     * @param user
     *   The signed-in user, who must be able to change the group.
@@ -258,26 +259,102 @@ final class GroupService
     *   The identifier of the group.
     *
     * @param invitee
-    *   The user to invite, by username.
+    *   The person or group to invite.
     *
     * @return
-    *   An answer with the invitee, or a refusal.
+    *   An answer with whom was invited and what came of it, or a refusal.
     */
-  def invite(user: User, group: Long, invitee: Invitee): Answer[User] = named(
-    invitee.username,
-  )(
-    groups
-      .invite(user.id, group, invitee.username.trim)
-      .flatTap(offer =>
-        tell(membersChanged(Seq(group), offer.invitee.id)) *>
-          offer
-            .invitation
-            .traverse_(sent =>
-              tell(IO.pure(Affected.Invited(sent, group, offer.invitee.id))),
-            ),
-      )
-      .map(_.invitee),
-  )
+  def invite(user: User, group: Long, invitee: Invitee): Answer[InviteResult] =
+    invitee match
+      case Invitee.Person(username) => named(username)(
+          groups
+            .invite(user.id, group, username.trim)
+            .flatTap(offer =>
+              val person = offer.invitee.principal.id
+              tell(membersChanged(Seq(group), person)) *>
+                offer
+                  .invitation
+                  .traverse_(sent =>
+                    tell(IO.pure(Affected.Invited(sent, group, person))),
+                  ),
+            )
+            .map(_.result),
+        )
+      case Invitee.Group(id) => failures.attempt(
+          groups
+            .inviteGroup(user.id, group, id)
+            .flatTap(offer =>
+              tell(groups.memberGroupsChanged(group, id)) *>
+                offer
+                  .invitation
+                  .traverse_(sent =>
+                    tell(
+                      groups
+                        .answerersFor(id)
+                        .map(Affected.GroupInvited(sent, group, id, _)),
+                    ),
+                  ),
+            )
+            .map(_.result),
+        )
+
+  /**
+    * Lists the unanswered invitations for groups a user may change to become
+    * members of others.
+    *
+    * @param user
+    *   The signed-in user.
+    *
+    * @return
+    *   An answer with the invitations, or a refusal.
+    */
+  def groupInvitations(user: User): Answer[List[GroupInvitation]] = failures
+    .attempt(groups.groupInvitations(user.id))
+
+  /**
+    * Accepts an invitation for a group the user may change to become a member
+    * of another.
+    *
+    * @param user
+    *   The signed-in user.
+    *
+    * @param invitation
+    *   The identifier of the invitation.
+    */
+  def acceptGroup(user: User, invitation: Long): Answer[Unit] =
+    answeringGroup(user, invitation)(groups.acceptGroup)
+
+  /**
+    * Declines an invitation for a group the user may change to become a member
+    * of another, deleting it.
+    *
+    * @param user
+    *   The signed-in user.
+    *
+    * @param invitation
+    *   The identifier of the invitation.
+    */
+  def declineGroup(user: User, invitation: Long): Answer[Unit] =
+    answeringGroup(user, invitation)(groups.declineGroup)
+
+  /**
+    * Takes a group out of another, or withdraws its invitation to it.
+    *
+    * @param user
+    *   The signed-in user, who must be able to change either group.
+    *
+    * @param group
+    *   The identifier of the group it is a member of or invited to.
+    *
+    * @param member
+    *   The identifier of the member group.
+    */
+  def removeGroup(user: User, group: Long, member: Long): Answer[Unit] =
+    failures.attempt(
+      groups
+        .removeGroup(user.id, group, member)
+        .flatTap(_ => tell(groups.memberGroupsChanged(group, member))),
+    )
 
   /**
     * Admits someone who asked to join a group.
@@ -416,6 +493,23 @@ final class GroupService
       .flatMap:
         case Some((group, invitee)) =>
           changingMembers(Seq(group), invitee)(answer(user.id, invitation))
+        case None => answer(user.id, invitation),
+  )
+
+  /**
+    * Answers an invitation for a group the user may change, then tells whom it
+    * concerns.
+    */
+  private def answeringGroup
+    (user: User, invitation: Long)
+    (answer: (Long, Long) => IO[Unit])
+    : Answer[Unit] = failures.attempt(
+    groups
+      .groupAnswerable(user.id, invitation)
+      .flatMap:
+        case Some((group, invitee)) => answer(user.id, invitation).flatTap(_ =>
+            tell(groups.memberGroupsChanged(group, invitee)),
+          )
         case None => answer(user.id, invitation),
   )
 
