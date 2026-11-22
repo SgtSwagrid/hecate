@@ -47,7 +47,8 @@ for full stack websites built on Slick, Cats Effect and Laminar, and optionally 
   null there. Groups are joined by invitation (which records who sent it), by a request a manager
   admits (only of a group the asker can see: public, or nested in one they belong to), or by an
   invite link; `LinkStore`/`LinkService` keep one link
-  per group or resource, each a random `InviteCode` (five of a-z0-9, any case, always a digit), and a link
+  per group or resource, each a random `InviteCode` (six hexadecimal digits, any case, always one of 0-9; a stored code
+  no longer valid counts as no link, and `ensure` replaces it), and a link
   to a resource grants its level through `GrantStore.raise`, under the row lock the host's `resources` hook takes.
   `SharingService` lets a resource's owners, a group's included (by the host's `access` hook, else stored grants), see and change who
   holds it and manage its link, under the same lock: a resource is never left with nobody holding `Own`

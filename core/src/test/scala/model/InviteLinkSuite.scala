@@ -8,29 +8,32 @@ import munit.FunSuite
 
 class InviteLinkSuite extends FunSuite:
 
-  test("a code is five letters or digits, read without regard to case"):
+  test("a code is six hexadecimal digits, read without regard to case"):
     assertEquals(
-      InviteCode.parse("k3x9q"),
-      Some("k3x9q"),
+      InviteCode.parse("3f9a2c"),
+      Some("3f9a2c"),
     )
     assertEquals(
-      InviteCode.parse("K3X9Q"),
-      Some("k3x9q"),
+      InviteCode.parse("3F9A2C"),
+      Some("3f9a2c"),
     )
     assertEquals(
-      InviteCode.parse("00000"),
-      Some("00000"),
+      InviteCode.parse("000000"),
+      Some("000000"),
     )
     List(
-      "k3x9",
-      "k3x9qz",
-      "k3-9q",
-      "k3x9é",
+      "3f9a2",
+      "3f9a2c7",
+      "3f9a2g",
+      "3f-a2c",
+      "3f9a2é",
       "",
-      "about",
+      "decade",
+      "k3x9q",
+      "३f9a2c",
     ).foreach(text => assertEquals(InviteCode.parse(text), None, text))
-    // The alphabet is the 26 letters and 10 digits, each once.
-    assertEquals(InviteCode.alphabet.length, 36)
+    // The alphabet is the 16 hexadecimal digits, each once.
+    assertEquals(InviteCode.alphabet.length, 16)
     assertEquals(
       InviteCode.alphabet.distinct,
       InviteCode.alphabet,
