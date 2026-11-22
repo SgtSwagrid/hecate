@@ -7,8 +7,8 @@ import com.alecdorrington.hecate.model.Resource
   * A report of whom a committed change concerns, for the host to notify. It
   * says nothing of what changed: whoever is told should ask again through the
   * endpoints that check what they may see, so a notice discloses nothing. The
-  * one exception, [[Affected.Invited]], names an invitation for a host that
-  * tells people they were invited.
+  * exceptions, [[Affected.Invited]] and [[Affected.PasswordSet]], say what
+  * happened for a host that tells the person it happened to.
   */
 enum Affected:
 
@@ -63,12 +63,36 @@ enum Affected:
 
   /**
     * A change to an account: a session closed, a password, email address or
-    * recovery codes replaced, or the account deleted.
+    * recovery codes replaced, a suspension, or the account renamed or deleted.
     *
     * @param user
     *   The identifier of the account's user.
     */
   case Account(user: Long)
+
+  /**
+    * A change to accounts as their managers see them: who manages them, their
+    * names, their suspension, or the invitations awaiting them.
+    *
+    * @param people
+    *   The people whose view of the accounts may have changed: whoever manages
+    *   them, before the change and after, and the accounts' own users, who see
+    *   who manages them.
+    */
+  case Accounts(people: Set[Long])
+
+  /**
+    * A password set for an account by someone who manages it, reported beside
+    * the change to the account, for a host that tells the account's user who
+    * did it.
+    *
+    * @param user
+    *   The identifier of the account's user.
+    *
+    * @param by
+    *   The identifier of the user who set the password.
+    */
+  case PasswordSet(user: Long, by: Long)
 
 /** A set of people a change concerns. */
 enum Audience:

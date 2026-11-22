@@ -176,8 +176,7 @@ final class LinkService
 
   /** Tells the host whom a followed link concerns, reporting any failure. */
   private def tell(user: Long, target: LinkTarget): IO[Unit] = (target match
-    case LinkTarget.Joining(group) =>
-      groups.surroundings(Seq(group)).map(_.membersChanged(user))
+    case LinkTarget.Joining(group) => groups.membersChanged(Seq(group), user)
     case LinkTarget.Sharing(resource, _) =>
       groups.grantsChanged(resource, Set.empty)
   ).flatMap(affected).handleErrorWith(report)

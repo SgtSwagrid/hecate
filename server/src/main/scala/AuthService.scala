@@ -144,7 +144,8 @@ final class AuthService
 
   /**
     * Opens a session once the password matches. An unknown username is refused
-    * exactly as a wrong password is, and as slowly.
+    * exactly as a wrong password is, and as slowly. A suspended account is
+    * refused as such only once its password is right.
     *
     * @param credentials
     *   The username and password given.
@@ -295,7 +296,8 @@ final class AuthService
   /**
     * Deletes a user's account (see [[AccountStore.delete]]) once their password
     * is confirmed; a guest's needs none. Refused if the service has no
-    * [[AccountStore]].
+    * [[AccountStore]], and while anyone manages the account, as deleting it is
+    * then theirs alone ([[AuthRefusal.AccountManaged]]).
     *
     * @param user
     *   The signed-in user.
@@ -498,8 +500,14 @@ final class AuthService
     : Answer[(User, SessionCookie)] = users
     .findByUsername(credentials.username.trim)
     .flatMap(verified(_, credentials.password))
-    .flatMap(_.traverse(row => openSession(row.toUser)))
-    .map(_.toRight(AuthRefusal.CredentialsIncorrect))
+    .flatMap:
+      case None      => IO.pure(Left(AuthRefusal.CredentialsIncorrect))
+      case Some(row) => users
+          .suspended(row.id)
+          .ifM(
+            IO.pure(Left(AuthRefusal.Suspended)),
+            openSession(row.toUser).map(Right(_)),
+          )
 
   private def lookup(token: Option[String]): IO[Option[User]] = token
     .flatTraverse(users.sessionUser)
@@ -518,9 +526,9 @@ final class AuthService
         .find(user.id)
         .flatMap:
           case Some(row) if row.passwordHash.isEmpty =>
-            store.delete(user.id).as(Right(SessionCookie.closed))
+            store.deleteOwn(user.id).as(Right(SessionCookie.closed))
           case _ => confirmed(user, password):
-              store.delete(user.id).as(SessionCookie.closed)
+              store.deleteOwn(user.id).as(SessionCookie.closed)
 
   private def issueCodes(user: User): IO[RecoveryCodes] = RecoveryCode
     .generate

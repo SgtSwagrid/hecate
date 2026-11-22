@@ -286,6 +286,14 @@ object EndpointsSuite:
     override val guestsPaused: String         = "Gäste pausiert."
     override val notGuest: String             = "Kein Gastkonto."
     override val accountClaimed: String       = "Konto eingerichtet."
+    override val suspended: String            = "Konto gesperrt."
+    override val accountManaged: String       = "Konto wird verwaltet."
+    override val managingSelf: String         = "Eigenes Konto."
+
+    override def usernamesTaken(usernames: List[String]): String =
+      s"Vergeben: ${ usernames.mkString(", ") }."
+
+    override def tooManyAccounts(max: Int): String = s"Höchstens $max Konten."
 
     override def confirmationSent(address: String): String =
       s"Link an $address gesendet."

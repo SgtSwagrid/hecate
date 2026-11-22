@@ -461,6 +461,53 @@ Until then `AuthService.deleteAccount` refuses, `AuthEndpoints` does not serve i
 the rule before a password is refused rather than after, and whether email is sent,
 so that clients offer it only then.
 
+### Accounts managed by others
+
+An organisation often runs its members' accounts itself: creates them, resets a forgotten
+password, suspends one, and deletes them when they leave. An account is therefore a resource too
+(`Resource.user(id)`, of the kind `Resource.userKind`, which your own resources must not use), and
+grants over it decide who *manages* it, as they decide who manages a group:
+
+- `View` sees it in `GET /api/accounts` (a `ManagedAccount` each: the user, the reader's access,
+  whether it is suspended, everyone managing it, and the invitations awaiting it);
+- `Edit` renames it, sets a new password for it, suspends it or lifts its suspension, and accepts
+  or declines its invitations to groups (through the ordinary invitation endpoints);
+- `Own` also deletes it, *releases* it (withdraws every grant over it, so that its user alone
+  manages it again), and chooses who manages it, through `SharingService`, which makes
+  transferring it a matter of granting `Own` to someone and withdrawing your own.
+
+An account is managed exactly when someone holds a grant over it. Its user's own powers over it
+come from being signed in as it, never from a grant: a grant reaching them over their own account,
+even through a group, confers nothing (`Permissions` leaves it out), nobody may be granted
+anything over their own account (`ManagingSelf`), and nobody manages their own account through
+these endpoints. Its user keeps their password their own, changing it with the old one as before,
+and sees who manages them (`GET /api/auth/managers`); but while it is managed, deleting it, like
+renaming it, is its managers' alone (`AccountManaged`). Nothing here lets a manager sign in as
+anyone, so a host that keeps its users' private work private keeps it so from their managers too.
+
+Setting a password signs out every session of the account and ends every link sent it by email,
+but leaves its recovery codes, which are its user's; it is reported as `Affected.PasswordSet`, so
+that you can tell the person who did it. A suspended account cannot be signed in to, by password,
+recovery code or emailed link, each refused as `Suspended` only once the secret given is right, and
+its sessions end; the one table this adds, `suspensions`, holds a row for each.
+
+`POST /api/accounts` creates accounts in bulk, all or none, up to `Protocol.maxAccountsPerRequest`
+at once: each a username and, if you like, a password (one is generated otherwise, and every
+password is answered this once, never stored unhashed). They are owned by the caller, or by a
+principal the caller names and may address (a group of colleagues, say), and join at once a group
+the caller may change. Inviting an account you may change to a group you may change joins it at
+once too, as you agree for both sides. A username taken, or given twice, is refused naming each
+(`UsernamesTaken`).
+
+```scala
+val accountService = AccountService(tables, db, users, groups, grants, Some(accounts))
+val accountEndpoints = AccountEndpoints(accountService, served).api ++
+  SharingEndpoints(sharing, Resource.userKind, SharingApi.of("accounts"), served).grants
+```
+
+Serve an account's grants alone: an invite link to an account would let anyone who follows it
+manage it, so `SharingService` refuses to make one.
+
 ### Permissions
 
 A grant gives a `Principal` (a `Person`, a `Group` or the `System`) one level of `Access` over a
@@ -543,6 +590,11 @@ members, who see one another, and that person; a change to the group itself (its
 concerns everyone who saw anything of it before or sees anything of it after, and everyone at all
 when it was or is public. `Affected.Groups` also names every group whose members may have changed,
 with those enclosing them, as anything the host addressed to one of them may now reach someone else.
+A change to accounts as their managers see them (who manages them, their names, suspension, or
+the invitations awaiting them) is `Affected.Accounts`, naming their managers before and after and
+the accounts' own users; a change to who is in a group concerns whoever manages that person's
+account too. `Affected.PasswordSet` is the other report that says what happened: a password set
+for someone by a manager, for a host that tells them who did it.
 Sharing a resource, following its invite link or changing that link changes the grants over it: the
 host alone knows who may see it, `Permissions.holders` names everyone a grant over it reaches, and
 `formerly` names everyone the grants reached before, who may no longer see it, whenever the change
@@ -600,6 +652,10 @@ server does.
 first; `claim(username, password)` keeps a guest's account. Offer the first only where
 `AuthRules.guests` says guests are let in.
 
+`AccountsState(auth)`, likewise headless, is the accounts the user manages and who manages their
+own, with a command for each power over them; an account's managers are a `SharingState` of the
+segment `accounts`, without a link (`linked = false`).
+
 Three more are made by a view for what it shows, and start every request through its own bindings:
 `SharingState(auth, segment, id, reloads)`, one resource's grants and link as its owner sees and
 changes them; `InviteLinks(auth, groups)`, which shows where a link leads and follows it; and
@@ -630,6 +686,14 @@ ask again who is signed in whenever one is refused.
 | `POST`   | `/api/auth/email/resend`                | Send a confirmation again.                |
 | `POST`   | `/api/auth/email/confirm`               | Confirm an email address with a link.     |
 | `POST`   | `/api/auth/account/delete`              | Delete your account.                      |
+| `GET`    | `/api/auth/managers`                    | List who manages your account.            |
+| `GET`    | `/api/accounts`                         | List the accounts you manage.             |
+| `POST`   | `/api/accounts`                         | Create accounts that you manage.          |
+| `PUT`    | `/api/accounts/{account}/username`      | Rename an account you manage.             |
+| `PUT`    | `/api/accounts/{account}/password`      | Set a password for an account you manage. |
+| `PUT`    | `/api/accounts/{account}/suspended`     | Suspend an account, or lift it.           |
+| `POST`   | `/api/accounts/{account}/release`       | Stop managing an account.                 |
+| `DELETE` | `/api/accounts/{account}`               | Delete an account you manage.             |
 | `GET`    | `/api/groups`                           | List the groups you manage, and who is in them. |
 | `GET`    | `/api/principals`                       | List whom you act as.                     |
 | `GET`    | `/api/groups/mine`                      | List groups you are in, with members.     |
@@ -649,8 +713,8 @@ ask again who is signed in whenever one is refused.
 | `PUT`    | `/api/groups/{group}/request`           | Ask to join a group.                      |
 | `DELETE` | `/api/groups/{group}/request`           | Withdraw a request to join.               |
 | `GET`    | `/api/invitations`                      | List the invitations sent to you.         |
-| `POST`   | `/api/invitations/{invitation}/accept`  | Accept an invitation.                     |
-| `POST`   | `/api/invitations/{invitation}/decline` | Decline an invitation.                    |
+| `POST`   | `/api/invitations/{invitation}/accept`  | Accept an invitation, yours or an account's you manage. |
+| `POST`   | `/api/invitations/{invitation}/decline` | Decline an invitation, likewise.          |
 | `GET`    | `/api/invite-links/{code}`              | See where an invite link leads.           |
 | `POST`   | `/api/invite-links/{code}/follow`       | Follow an invite link.                    |
 | `POST`   | `/api/invite-links/{code}/welcome`      | Follow an invite link as a new guest.     |

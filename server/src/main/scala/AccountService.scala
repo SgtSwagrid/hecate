@@ -1,0 +1,572 @@
+package com.alecdorrington.hecate
+package server
+
+import cats.effect.IO
+import cats.effect.std.Console
+import cats.effect.syntax.all.*
+import cats.syntax.all.*
+import com.alecdorrington.hecate.api.Protocol
+import com.alecdorrington.hecate.model.{
+  Access, AccountCreation, AuthRefusal, CreatedAccount, Grant, ManagedAccount,
+  Manager, PasswordSetting, Principal, Resource, User, UsernameChange,
+}
+import java.security.SecureRandom
+import scala.util.{Failure, Success}
+import slick.dbio.DBIO
+
+/**
+  * A service for accounts their users do not manage alone: creating accounts
+  * for others to use, and managing them. An account is a resource
+  * ([[Resource.user]]), and grants over it decide who manages it, shared
+  * through [[SharingService]] as any resource's are: [[Access.View]] to see it,
+  * [[Access.Edit]] to rename it, set its password, suspend it and answer its
+  * invitations (see [[GroupStore.accept]]), and [[Access.Own]] to delete it,
+  * release it and choose who manages it. Below the level an action needs, an
+  * account is missing.
+  *
+  * Its user's own powers over it come from being signed in as it, never from a
+  * grant, so nobody manages their own account through this service
+  * ([[AuthRefusal.ManagingSelf]]); they keep their password their own, but may
+  * not delete a managed account themselves. Nothing here signs anyone in as
+  * anyone else.
+  *
+  * Every change locks the account's user's row first, as sharing it does
+  * (through [[GroupStore.named]]), so that access is checked against the grants
+  * that stand.
+  *
+  * @param tables
+  *   The tables the accounts are stored in.
+  *
+  * @param db
+  *   The database the stores use.
+  *
+  * @param users
+  *   The store of users.
+  *
+  * @param groups
+  *   The store of groups.
+  *
+  * @param grants
+  *   The store of grants.
+  *
+  * @param accounts
+  *   The store that deletes accounts, or `None` to refuse deletion, as for
+  *   [[AuthService]].
+  *
+  * @param policy
+  *   The rules for passwords, which those created or set here follow too.
+  *
+  * @param report
+  *   The handler of failures whose detail must not reach the client. The
+  *   default prints to the console.
+  *
+  * @param affected
+  *   The hook told whom each committed change concerns (see [[Affected]]).
+  */
+final class AccountService
+  (
+    tables: AuthTables,
+    db: Transactor,
+    users: UserStore,
+    groups: GroupStore,
+    grants: GrantStore,
+    accounts: Option[AccountStore] = None,
+    policy: AuthPolicy = AuthPolicy(),
+    report: Throwable => IO[Unit] = error => Console[IO].printStackTrace(error),
+    affected: Affected => IO[Unit] = _ => IO.unit,
+  ):
+
+  import tables.profile.api.*
+
+  private val failures = Failures(report)
+
+  private val permissions = Permissions(groups, grants)
+
+  /**
+    * Lists the accounts a user manages, holding at least [[Access.View]] over
+    * them, never their own.
+    *
+    * @param user
+    *   The signed-in user.
+    *
+    * @return
+    *   An answer with the accounts, by username, or a refusal.
+    */
+  def list(user: User): Answer[List[ManagedAccount]] = failures.attempt(db.run(
+    for
+      levels <- permissions.levelsAt(user.id, Resource.userKind)
+      ids = levels.keys.toSeq
+      rows <- ifAny(ids)(Seq.empty[UserRow]): wanted =>
+        tables.users.filter(_.id inSet wanted).sortBy(_.usernameKey).result
+      suspended   <- users.suspendedAmong(ids)
+      managers    <- groups.managersAt(Resource.userKind, ids, Access.View)
+      invitations <- groups.invitationsOf(ids)
+    yield rows
+      .map(row =>
+        ManagedAccount(
+          row.toUser,
+          levels(row.id),
+          suspended(row.id),
+          managers.getOrElse(row.id, List.empty),
+          invitations.getOrElse(row.id, List.empty),
+        ),
+      )
+      .toList,
+  ))
+
+  /**
+    * Lists whoever manages a user's own account, so that they know.
+    *
+    * @param user
+    *   The signed-in user.
+    *
+    * @return
+    *   An answer with the managers, owners first, or a refusal; none for an
+    *   account its user manages alone.
+    */
+  def managers(user: User): Answer[List[Manager]] = failures.attempt(db.run(
+    groups
+      .managersAt(
+        Resource.userKind,
+        Seq(user.id),
+        Access.View,
+      )
+      .map(_.getOrElse(user.id, List.empty)),
+  ))
+
+  /**
+    * Creates accounts for others to use, each managed by the owner the request
+    * names, and each joining the group it names at once. All are created or
+    * none. A password not given is generated, and every password is answered
+    * this once.
+    *
+    * @param user
+    *   The signed-in user, who must be able to address the owner and change the
+    *   group.
+    *
+    * @param creation
+    *   The accounts, their group and their owner.
+    *
+    * @return
+    *   An answer with the accounts and their passwords, in the order given, or
+    *   a refusal.
+    */
+  def create
+    (user: User, creation: AccountCreation)
+    : Answer[List[CreatedAccount]] =
+    val owner = creation.owner.getOrElse(Principal.Person(user.id))
+    failures
+      .attemptRefusable(checked(creationProblem(creation))(
+        mayCreate(user, owner, creation.group).flatMap:
+          case Some(refusal) => IO.pure(Left(refusal))
+          case None          => passwordsFor(creation).flatMap(made =>
+              store(user, owner, creation.group, made).map(Right(_)),
+            ),
+      ))
+      .flatTap(
+        _.toOption
+          .traverse_(created =>
+            tell(createdAffects(
+              owner,
+              creation.group,
+              created.map(_.user.id),
+            )),
+          ),
+      )
+
+  /**
+    * Renames an account the user may change.
+    *
+    * @param user
+    *   The signed-in user.
+    *
+    * @param account
+    *   The identifier of the account's user.
+    *
+    * @param change
+    *   The new username.
+    *
+    * @return
+    *   An answer with the renamed user, or a refusal.
+    */
+  def rename
+    (
+      user: User,
+      account: Long,
+      change: UsernameChange,
+    )
+    : Answer[User] =
+    val username = change.username.trim
+    failures
+      .attemptRefusable(
+        checked(
+          Bounds.name(change.username),
+          Option.when(username.isEmpty)(AuthRefusal.UsernameEmpty),
+        )(
+          db.run(
+              managing(user.id, account, Access.Edit)(
+                users.rename(account, username).map(_ => ()),
+              ).transactionally.asTry,
+            )
+            .flatMap:
+              case Success(()) => users
+                  .find(account)
+                  .map(found =>
+                    found
+                      .map(_.toUser)
+                      .toRight(AuthRefusal.ResourceMissing(Resource.userKind)),
+                  )
+              case Failure(error) if UserStore.taken(error) =>
+                IO.pure(Left(AuthRefusal.UsernameTaken))
+              case Failure(error) => IO.raiseError(error),
+        ),
+      )
+      .flatTap(renamed =>
+        IO.whenA(renamed.isRight)(
+          tell(accountAffects(account)) *> tellNow(Affected.Account(account)) *>
+            tellNow(Affected.Groups(Audience.Everyone, Set.empty)),
+        ),
+      )
+
+  /**
+    * Sets the password of an account the user may change, closing every session
+    * of it and every link sent it by email. Its user keeps their recovery
+    * codes. Reported as [[Affected.PasswordSet]], so that the host can tell
+    * them who did it.
+    *
+    * @param user
+    *   The signed-in user.
+    *
+    * @param account
+    *   The identifier of the account's user.
+    *
+    * @param setting
+    *   The new password.
+    *
+    * @return
+    *   An answer with nothing, or a refusal.
+    */
+  def setPassword
+    (
+      user: User,
+      account: Long,
+      setting: PasswordSetting,
+    )
+    : Answer[Unit] = failures
+    .attemptRefusable(checked(policy.passwordProblem(setting.password))(
+      Passwords
+        .hash(
+          setting.password,
+          policy.hashIterations,
+        )
+        .flatMap(hash =>
+          db.run(
+            managing(user.id, account, Access.Edit)(
+              users.setPassword(account, hash),
+            ).transactionally,
+          ),
+        )
+        .map(Right(_)),
+    ))
+    .flatTap(set =>
+      IO.whenA(set.isRight)(
+        tellNow(Affected.Account(account)) *>
+          tellNow(Affected.PasswordSet(account, user.id)),
+      ),
+    )
+
+  /**
+    * Suspends an account the user may change, so that nobody can sign in to it,
+    * closing every session of it; or lifts its suspension.
+    *
+    * @param user
+    *   The signed-in user.
+    *
+    * @param account
+    *   The identifier of the account's user.
+    *
+    * @param suspended
+    *   Whether the account is to be suspended.
+    *
+    * @return
+    *   An answer with nothing, or a refusal.
+    */
+  def suspend
+    (
+      user: User,
+      account: Long,
+      suspended: Boolean,
+    )
+    : Answer[Unit] = failures
+    .attempt(db.run(
+      managing(user.id, account, Access.Edit)(users.suspend(account, suspended))
+        .transactionally,
+    ))
+    .flatTap(done =>
+      IO.whenA(done.isRight)(
+        tellNow(Affected.Account(account)) *> tell(accountAffects(account)),
+      ),
+    )
+
+  /**
+    * Releases an account the user owns: withdraws every grant over it and lifts
+    * any suspension, so that its user alone manages it again.
+    *
+    * @param user
+    *   The signed-in user.
+    *
+    * @param account
+    *   The identifier of the account's user.
+    *
+    * @return
+    *   An answer with nothing, or a refusal.
+    */
+  def release(user: User, account: Long): Answer[Unit] = failures
+    .attempt(db.run(
+      managing(user.id, account, Access.Own)(
+        permissions
+          .holding(Resource.user(account))
+          .flatMap(formerly => groups.release(account).map(_ => formerly)),
+      ).transactionally,
+    ))
+    .flatTap(
+      _.toOption
+        .traverse_(formerly =>
+          tellNow(Affected.Accounts(formerly + account)) *>
+            tellNow(Affected.Account(account)),
+        ),
+    )
+    .map(_.void)
+
+  /**
+    * Deletes an account the user owns, and everything that belongs to it, as
+    * [[AccountStore.delete]] does, refused alike while it alone owns something.
+    * Refused if the service has no [[AccountStore]].
+    *
+    * @param user
+    *   The signed-in user.
+    *
+    * @param account
+    *   The identifier of the account's user.
+    *
+    * @return
+    *   An answer with nothing, or a refusal.
+    */
+  def delete(user: User, account: Long): Answer[Unit] = accounts match
+    case None        => IO.pure(Left(AuthRefusal.NoAccountDeletion))
+    case Some(store) => failures
+        .attempt(db.run((for
+          formerly <- permissions.holding(Resource.user(account))
+          _ <- store.deleting(account)(permitted(user.id, account, Access.Own))
+        yield formerly).transactionally))
+        .flatTap(
+          _.toOption
+            .traverse_(formerly =>
+              tellNow(Affected.Account(account)) *>
+                tellNow(Affected.Groups(Audience.Everyone, Set.empty)) *>
+                tellNow(Affected.Accounts(formerly)),
+            ),
+        )
+        .map(_.void)
+
+  /**
+    * Runs a change to an account once the user is found to hold at least the
+    * given access over it, under its user's row lock.
+    */
+  private def managing[X]
+    (user: Long, account: Long, least: Access)
+    (change: DBIO[X])
+    : DBIO[X] =
+    for
+      _      <- tables.lockUser(account)
+      _      <- permitted(user, account, least)
+      result <- change
+    yield result
+
+  /**
+    * Refuses unless the user holds at least the given access over another's
+    * account; below it, the account is missing.
+    */
+  private def permitted(user: Long, account: Long, least: Access): DBIO[Unit] =
+    if user == account then DBIO.failed(AuthProblem(AuthRefusal.ManagingSelf))
+    else
+      permissions
+        .accessAt(user, Resource.user(account))
+        .flatMap(level =>
+          refuseUnless(
+            level.exists(_.includes(least)),
+            AuthRefusal.ResourceMissing(Resource.userKind),
+          ),
+        )
+
+  /** The first reason the request is unsound, before anything is hashed. */
+  private def creationProblem(creation: AccountCreation): Option[AuthRefusal] =
+    val asked    = creation.accounts
+    val repeated = asked
+      .groupBy(account => Username.key(account.username.trim))
+      .values
+      .filter(_.sizeIs > 1)
+      .map(_.head.username.trim)
+      .toList
+    Option
+      .when(asked.sizeIs > Protocol.maxAccountsPerRequest)(
+        AuthRefusal.TooManyAccounts(Protocol.maxAccountsPerRequest),
+      )
+      .orElse(
+        asked.view.flatMap(account => Bounds.name(account.username)).headOption,
+      )
+      .orElse(Option.when(asked.exists(_.username.trim.isEmpty))(
+        AuthRefusal.UsernameEmpty,
+      ))
+      .orElse(
+        asked
+          .view
+          .flatMap(_.password.flatMap(policy.passwordProblem))
+          .headOption,
+      )
+      .orElse(Option.when(repeated.nonEmpty)(AuthRefusal.UsernamesTaken(
+        repeated,
+      )))
+
+  /**
+    * Refuses an owner the user may not address or a group they may not change,
+    * before anything is hashed. Both are checked again where the accounts are
+    * stored.
+    */
+  private def mayCreate
+    (
+      user: User,
+      owner: Principal,
+      group: Option[Long],
+    )
+    : IO[Option[AuthRefusal]] =
+    for
+      addressable <- groups.mayAddress(user.id, owner)
+      changeable  <-
+        group.traverse(id => permissions.access(user.id, Resource.group(id)))
+    yield Option
+      .unless(addressable)(AuthRefusal.PrincipalMissing)
+      .orElse(
+        Option.when(
+          changeable.exists(!_.exists(_.includes(Access.Edit))),
+        )(AuthRefusal.GroupMissing),
+      )
+
+  /** Each account's username and password, generating any not given. */
+  private def passwordsFor
+    (creation: AccountCreation)
+    : IO[List[(String, String)]] = creation
+    .accounts
+    .traverse(account =>
+      account
+        .password
+        .fold(AccountService.generate(policy.minPasswordLength))(IO.pure)
+        .map(account.username.trim -> _),
+    )
+
+  /**
+    * Hashes the passwords, then stores the accounts, grants their owner `Own`
+    * over each and enrols them in the group, all in one transaction. Locks are
+    * taken in the order group deletion takes them: the owner's row, then the
+    * group's.
+    */
+  private def store
+    (
+      user: User,
+      owner: Principal,
+      group: Option[Long],
+      made: List[(String, String)],
+    )
+    : IO[List[CreatedAccount]] = made
+    .parTraverseN(AccountService.hashers)((_, password) =>
+      Passwords.hash(password, policy.hashIterations),
+    )
+    .flatMap(hashes =>
+      db.run((for
+        stored <- users.createAll(made.map(_._1).zip(hashes))
+        _      <- groups
+          .mayAddressAt(user.id, owner)
+          .flatMap(refuseUnless(_, AuthRefusal.PrincipalMissing))
+        _ <- DBIO.seq(
+          stored.map(created =>
+            grants.grant(Grant(
+              Resource.user(created.id),
+              owner,
+              Access.Own,
+            )),
+          )*,
+        )
+        _ <-
+          group.fold(DBIO.unit)(groups.enrolAll(user.id, _, stored.map(_.id)))
+      yield stored).transactionally.asTry),
+    )
+    .flatMap:
+      case Success(stored) => IO.pure(
+          stored
+            .zip(made)
+            .map((created, account) => CreatedAccount(created, account._2))
+            .toList,
+        )
+      case Failure(error) if UserStore.taken(error) =>
+        IO.raiseError(AuthProblem(AuthRefusal.UsernameTaken))
+      case Failure(error) => IO.raiseError(error)
+
+  /** Whom creating accounts concerns: their owners, and the group's members. */
+  private def createdAffects
+    (
+      owner: Principal,
+      group: Option[Long],
+      created: Seq[Long],
+    )
+    : IO[List[Affected]] =
+    for
+      owners <- db.run(groups.usersOf(Seq(owner)))
+      joined <- group.traverse(id =>
+        groups
+          .surroundings(Seq(id))
+          .map(around =>
+            Affected.Groups(
+              Audience.People(around.managers ++ around.members),
+              around.enclosing,
+            ),
+          ),
+      )
+    yield Affected.Accounts(owners ++ created) :: joined.toList
+
+  /** Whom a change to an account concerns: its managers, and its user. */
+  private def accountAffects(account: Long): IO[List[Affected]] = db
+    .run(permissions.holding(Resource.user(account)))
+    .map(managers => List(Affected.Accounts(managers + account)))
+
+  /** Tells the host whom a committed change concerns, reporting any failure. */
+  private def tell(concerned: IO[List[Affected]]): IO[Unit] = concerned
+    .flatMap(_.traverse_(affected))
+    .handleErrorWith(report)
+
+  private def tellNow(concerned: Affected): IO[Unit] =
+    tell(IO.pure(List(concerned)))
+
+object AccountService:
+
+  private val random = SecureRandom()
+
+  private val alphabet = "abcdefghjkmnpqrstuvwxyz23456789"
+
+  /** The number of passwords hashed at once while creating accounts. */
+  private val hashers = math.max(
+    1,
+    Runtime.getRuntime.availableProcessors / 2,
+  )
+
+  /**
+    * Generates a password of groups of four characters with no look-alikes,
+    * joined by hyphens, at least three groups (about 59 bits) and at least as
+    * long as the policy asks.
+    */
+  private def generate(least: Int): IO[String] = IO:
+    val groups = math.max(3, (least + 5) / 5)
+    List
+      .fill(groups)(
+        List.fill(4)(alphabet(random.nextInt(alphabet.length))).mkString,
+      )
+      .mkString("-")

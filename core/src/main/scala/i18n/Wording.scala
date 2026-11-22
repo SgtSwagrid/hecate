@@ -180,6 +180,47 @@ trait Wording:
   val mailedRecently: String
 
   /**
+    * The refusal to sign in to, or regain, an account its managers have
+    * suspended.
+    */
+  val suspended: String
+
+  /**
+    * The refusal of something only an account's managers may do, such as
+    * deleting it, asked by the account's own user.
+    */
+  val accountManaged: String
+
+  /**
+    * The refusal to manage one's own account, or to grant someone access over
+    * their own account.
+    */
+  val managingSelf: String
+
+  /**
+    * Words the refusal to create accounts whose usernames are taken or
+    * repeated.
+    *
+    * @param usernames
+    *   The usernames taken or repeated.
+    *
+    * @return
+    *   A sentence naming the usernames.
+    */
+  def usernamesTaken(usernames: List[String]): String
+
+  /**
+    * Words the refusal to create more accounts at once than allowed.
+    *
+    * @param max
+    *   The most accounts one request may create.
+    *
+    * @return
+    *   A sentence stating the number.
+    */
+  def tooManyAccounts(max: Int): String
+
+  /**
     * The refusal of a request that failed for an internal reason, the same for
     * every failure so that its cause cannot be guessed.
     */
@@ -361,6 +402,11 @@ trait Wording:
     case AuthRefusal.EmailLinkMissing      => emailLinkMissing
     case AuthRefusal.NoEmail               => noEmail
     case AuthRefusal.MailedRecently        => mailedRecently
+    case AuthRefusal.Suspended             => suspended
+    case AuthRefusal.AccountManaged        => accountManaged
+    case AuthRefusal.ManagingSelf          => managingSelf
+    case AuthRefusal.UsernamesTaken(names) => usernamesTaken(names)
+    case AuthRefusal.TooManyAccounts(max)  => tooManyAccounts(max)
     case AuthRefusal.Failed                => requestFailed
 
 object Wording:
@@ -448,6 +494,23 @@ object Wording:
     override val mailedRecently: String =
       "An email was sent to you a moment ago. Wait a little before asking " +
         "for another."
+
+    override val suspended: String =
+      "This account is suspended. Ask whoever manages it."
+
+    override val accountManaged: String =
+      "Your account is managed by someone else, who alone may do this."
+
+    override val managingSelf: String =
+      "Nobody can manage their own account, or be given access over it."
+
+    override def usernamesTaken(usernames: List[String]): String =
+      val quoted = usernames.map(name => s"\"$name\"").mkString(", ")
+      if usernames.sizeIs == 1 then s"The username $quoted is already taken."
+      else s"These usernames are already taken: $quoted."
+
+    override def tooManyAccounts(max: Int): String =
+      s"At most $max accounts can be created at once."
 
     override val requestFailed: String = "The request couldn't be completed."
 

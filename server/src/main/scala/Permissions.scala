@@ -11,6 +11,10 @@ import slick.dbio.DBIO
   * belong to, and the system if the host names them as acting for it. Access
   * the host derives from its own data is not considered here.
   *
+  * A grant reaching a user over their own account ([[Resource.user]]) confers
+  * nothing on them, as their powers over it come from being signed in as it:
+  * they hold no access over it here, and are never among its holders.
+  *
   * @param groups
   *   The store of groups, which decides the principals each user acts as.
   *
@@ -32,9 +36,15 @@ final class Permissions(groups: GroupStore, grants: GrantStore):
     *   An effect producing the highest level reaching the user, or `None` if no
     *   grant does.
     */
-  def access(user: Long, resource: Resource): IO[Option[Access]] = groups
-    .principalsOf(user)
-    .flatMap(grants.access(_, resource))
+  def access(user: Long, resource: Resource): IO[Option[Access]] =
+    grants.run(accessAt(user, resource))
+
+  /** As [[access]], in the caller's transaction. */
+  private[server] def accessAt
+    (user: Long, resource: Resource)
+    : DBIO[Option[Access]] =
+    if Permissions.ownAccount(user, resource) then DBIO.successful(None)
+    else groups.principalsAt(user).flatMap(grants.accessOf(_, resource))
 
   /**
     * Lists the resources of one kind over which a user holds at least the given
@@ -53,7 +63,10 @@ final class Permissions(groups: GroupStore, grants: GrantStore):
     *   An effect producing the identifiers of the resources.
     */
   def accessible(user: Long, kind: String, least: Access): IO[Set[Long]] =
-    groups.principalsOf(user).flatMap(grants.accessible(_, kind, least))
+    groups
+      .principalsOf(user)
+      .flatMap(grants.accessible(_, kind, least))
+      .map(ids => if kind == Resource.userKind then ids - user else ids)
 
   /**
     * Resolves, in one query, the highest stored access a user holds over every
@@ -69,9 +82,16 @@ final class Permissions(groups: GroupStore, grants: GrantStore):
     *   An effect producing each resource's identifier mapped to the highest
     *   level the user holds over it.
     */
-  def levels(user: Long, kind: String): IO[Map[Long, Access]] = groups
-    .principalsOf(user)
-    .flatMap(grants.levels(_, kind))
+  def levels(user: Long, kind: String): IO[Map[Long, Access]] =
+    grants.run(levelsAt(user, kind))
+
+  /** As [[levels]], in the caller's transaction. */
+  private[server] def levelsAt
+    (user: Long, kind: String)
+    : DBIO[Map[Long, Access]] = groups
+    .principalsAt(user)
+    .flatMap(grants.levelsAt(_, kind))
+    .map(levels => if kind == Resource.userKind then levels - user else levels)
 
   /**
     * Finds every user whom stored access of at least the given level over a
@@ -105,3 +125,12 @@ final class Permissions(groups: GroupStore, grants: GrantStore):
     .granted(resource)
     .map(_.filter(_.access.includes(least)).map(_.principal))
     .flatMap(groups.usersOf)
+    .map(users =>
+      if resource.kind == Resource.userKind then users - resource.id else users,
+    )
+
+object Permissions:
+
+  /** Whether a resource is the user's own account. */
+  private[server] def ownAccount(user: Long, resource: Resource): Boolean =
+    resource == Resource.user(user)

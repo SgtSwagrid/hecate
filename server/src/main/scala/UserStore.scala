@@ -252,7 +252,7 @@ final class UserStore(tables: AuthTables, db: Transactor):
     *
     * @return
     *   An effect producing the user, or `None` if the session is missing or
-    *   expired.
+    *   expired, or the account is suspended, whenever its session was opened.
     */
   def sessionUser(token: String): IO[Option[User]] = IO
     .realTime
@@ -267,6 +267,9 @@ final class UserStore(tables: AuthTables, db: Transactor):
           .join(tables.users)
           .on(_.userId === _.id)
           .map(_._2)
+          .filterNot(user =>
+            tables.suspensions.filter(_.userId === user.id).exists,
+          )
           .result
           .headOption,
       ),
@@ -312,7 +315,8 @@ final class UserStore(tables: AuthTables, db: Transactor):
   /**
     * Regains an account with a recovery code, using the code up and resetting
     * the password as [[resetPassword]] does. A missing account and a wrong code
-    * are answered alike, so usernames cannot be discovered.
+    * are answered alike, so usernames cannot be discovered. A suspended account
+    * fails with [[AuthRefusal.Suspended]], once the code is right, keeping it.
     *
     * @param username
     *   The account's username.
@@ -365,7 +369,10 @@ final class UserStore(tables: AuthTables, db: Transactor):
     : DBIO[Option[User]] = found.fold(DBIO.successful(None))(row =>
     consumeCode(row.id, codeHash).flatMap(used =>
       if used then
-        reset(row.id, passwordHash, token, expiresAt).map(_ => Some(row.toUser))
+        for
+          _ <- unlessSuspended(row.id)
+          _ <- reset(row.id, passwordHash, token, expiresAt)
+        yield Some(row.toUser)
       else DBIO.successful(None),
     ),
   )
@@ -533,7 +540,8 @@ final class UserStore(tables: AuthTables, db: Transactor):
 
   /**
     * Resets a password with an emailed link, using the link up and setting the
-    * password as [[resetPassword]] does.
+    * password as [[resetPassword]] does. A suspended account fails with
+    * [[AuthRefusal.Suspended]], once the link is right, keeping it.
     *
     * @param tokenHash
     *   The hash of the link's secret.
@@ -565,7 +573,9 @@ final class UserStore(tables: AuthTables, db: Transactor):
     : IO[Option[User]] = db.run((for
     used <- consumeLink(tokenHash, EmailPurpose.Reset, now)
     _    <- used.fold[DBIO[Unit]](DBIO.unit)((_, row) =>
-      reset(row.id, passwordHash, token, expiresAt),
+      unlessSuspended(row.id).flatMap(_ =>
+        reset(row.id, passwordHash, token, expiresAt),
+      ),
     )
   yield used.map(_._2.toUser)).transactionally)
 
@@ -636,8 +646,104 @@ final class UserStore(tables: AuthTables, db: Transactor):
     sessionsOf(user).delete,
     codesOf(user).delete,
     allLinksOf(user).delete,
+    suspension(user).delete,
     byId(user).delete,
   )
+
+  /**
+    * Checks whether an account is suspended.
+    *
+    * @param user
+    *   The identifier of the account's user.
+    *
+    * @return
+    *   An effect producing whether it is suspended.
+    */
+  def suspended(user: Long): IO[Boolean] =
+    db.run(suspension(user).exists.result)
+
+  /** The suspended accounts among some users, in the caller's transaction. */
+  private[server] def suspendedAmong(users: Seq[Long]): DBIO[Set[Long]] = ifAny(
+    users.distinct,
+  )(Set.empty[Long]): wanted =>
+    tables
+      .suspensions
+      .filter(_.userId inSet wanted)
+      .map(_.userId)
+      .result
+      .map(_.toSet)
+
+  /**
+    * Suspends an account, closing every session of it, or lifts its suspension.
+    * Callers must hold the user's row locked.
+    */
+  private[server] def suspend(user: Long, suspended: Boolean): DBIO[Unit] =
+    if suspended then
+      DBIO.seq(
+        suspension(user).delete,
+        tables.suspensions += SuspensionRow(user),
+        sessionsOf(user).delete,
+      )
+    else suspension(user).delete.unit
+
+  /**
+    * Renames a user. The unique key column decides whether the name is free, so
+    * the caller's transaction fails with a constraint violation (see
+    * [[UserStore.taken]]) if it is not.
+    */
+  private[server] def rename(user: Long, username: String): DBIO[Unit] =
+    byId(user)
+      .map(row => (row.username, row.usernameKey))
+      .update((username, Username.key(username)))
+      .unit
+
+  /**
+    * Sets a user's password for them, closing every session and emailed link,
+    * as no old session or link should outlive it, but keeping their recovery
+    * codes, which are theirs.
+    */
+  private[server] def setPassword
+    (user: Long, passwordHash: String)
+    : DBIO[Unit] = DBIO.seq(
+    byId(user).map(_.passwordHash).update(Some(passwordHash)),
+    sessionsOf(user).delete,
+    allLinksOf(user).delete,
+  )
+
+  /**
+    * Stores new users with their passwords' hashes, in order. Fails with
+    * [[AuthRefusal.UsernamesTaken]] naming each username already held; one
+    * taken meanwhile fails with a constraint violation instead.
+    */
+  private[server] def createAll
+    (accounts: Seq[(String, String)])
+    : DBIO[Seq[User]] =
+    val keys = accounts.map((username, _) => Username.key(username))
+    for
+      held <- ifAny(keys)(Seq.empty[String]): wanted =>
+        tables
+          .users
+          .filter(_.usernameKey inSet wanted)
+          .map(_.usernameKey)
+          .result
+      _ <- refuseUnless(
+        held.isEmpty,
+        AuthRefusal.UsernamesTaken(
+          accounts
+            .map(_._1)
+            .filter(name => held.contains(Username.key(name)))
+            .toList,
+        ),
+      )
+      ids <- tables.users.returning(tables.users.map(_.id)) ++=
+        accounts.map((username, hash) => UserRow(0, username, Some(hash), None))
+    yield ids.zip(accounts).map((id, account) => User(id, account._1))
+
+  /** Fails with [[AuthRefusal.Suspended]] if the account is suspended. */
+  private def unlessSuspended(user: Long): DBIO[Unit] = suspension(user)
+    .exists
+    .result
+    .flatMap(held => refuseUnless(!held, AuthRefusal.Suspended))
 
   /**
     * Sets a password, replacing every session with the given one and
@@ -700,6 +806,10 @@ final class UserStore(tables: AuthTables, db: Transactor):
 
   private def byId(user: Long) = tables.users.filter(_.id === user)
 
+  private def suspension(user: Long) = tables
+    .suspensions
+    .filter(_.userId === user)
+
   private def byUsername(username: String) = tables
     .users
     .filter(_.usernameKey === Username.key(username))
@@ -738,6 +848,19 @@ object UserStore:
       .map(number => if number == 1 then name else s"$name $number")
       .find(candidate => !taken(Username.key(candidate)))
       .get
+
+  /**
+    * Whether a failure is an integrity constraint violation, such as a username
+    * taken meanwhile.
+    *
+    * @param error
+    *   The failure.
+    *
+    * @return
+    *   Whether it is one.
+    */
+  private[server] def taken(error: Throwable): Boolean =
+    violatesConstraint(error)
 
   /**
     * Whether a failure is an integrity constraint violation, recognised by

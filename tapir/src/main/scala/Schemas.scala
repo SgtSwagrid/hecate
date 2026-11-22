@@ -5,11 +5,13 @@ import com.alecdorrington.hecate.api.Protocol.{
   maxEmailLength, maxGuestNameLength, maxNameLength, maxPasswordLength,
 }
 import com.alecdorrington.hecate.model.{
-  Access, AuthRules, Credentials, EmailChange, EmailConfirmation, EmailStatus,
-  Gated, Grant, Group, GroupDetails, Guest, Holder, Invitation, Invitee,
-  InviteLink, JoinableGroup, LinkPreview, LinkTarget, ManagedGroup, Membership,
-  PasswordChange, PasswordCheck, PasswordReset, PasswordResetRequest, Permitted,
-  Principal, Recovery, RecoveryCodes, Resource, User, Welcome,
+  Access, AccountCreation, AuthRules, CreatedAccount, Credentials, EmailChange,
+  EmailConfirmation, EmailStatus, Gated, Grant, Group, GroupDetails, Guest,
+  Holder, Invitation, Invitee, InviteLink, JoinableGroup, LinkPreview,
+  LinkTarget, ManagedAccount, ManagedGroup, Manager, Membership, NewAccount,
+  PasswordChange, PasswordCheck, PasswordReset, PasswordResetRequest,
+  PasswordSetting, Permitted, Principal, Recovery, RecoveryCodes, Resource,
+  User, UsernameChange, Welcome,
 }
 import sttp.tapir.{FieldName, Schema, SchemaType, Validator}
 
@@ -77,6 +79,24 @@ object Schemas:
   given Schema[Holder] = Schema.derived
 
   given Schema[Grant] = Schema.derived
+
+  given Schema[Manager]        = Schema.derived
+  given Schema[ManagedAccount] = Schema.derived
+  given Schema[UsernameChange] = Schema.derived
+
+  given Schema[NewAccount] = Schema
+    .derived[NewAccount]
+    .modify(_.password)(_ => bounded(maxPasswordLength).asOption)
+
+  given Schema[AccountCreation] = Schema.derived
+
+  given Schema[CreatedAccount] = Schema
+    .derived[CreatedAccount]
+    .modify(_.password)(_ => bounded(maxPasswordLength))
+
+  given Schema[PasswordSetting] = Schema
+    .derived[PasswordSetting]
+    .modify(_.password)(_ => bounded(maxPasswordLength))
 
   /** The schema of a value beside its reader's access. */
   given [X : Schema]: Schema[Permitted[X]] = Schema.derived
