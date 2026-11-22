@@ -295,6 +295,15 @@ object EndpointsSuite:
 
     override def tooManyAccounts(max: Int): String = s"Höchstens $max Konten."
 
+    override def accountsCreatedRecently(perHour: Int): String =
+      s"Höchstens $perHour Konten pro Stunde."
+
+    override val guestAccount: String = "Erst das Gastkonto behalten."
+
+    override val passwordChangeRequired: String = "Eigenes Passwort wählen."
+
+    override val passwordReused: String = "Anderes Passwort wählen."
+
     override def confirmationSent(address: String): String =
       s"Link an $address gesendet."
 

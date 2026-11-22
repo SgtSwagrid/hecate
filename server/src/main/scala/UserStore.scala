@@ -179,6 +179,24 @@ final class UserStore(tables: AuthTables, db: Transactor):
     db.run(byUsername(username).result.headOption)
 
   /**
+    * Finds which of some usernames are held, whatever their letter case.
+    *
+    * @param usernames
+    *   The usernames, already trimmed.
+    *
+    * @return
+    *   An effect producing those held, as given.
+    */
+  def heldAmong(usernames: Seq[String]): IO[List[String]] = db
+    .run(
+      ifAny(usernames.map(Username.key).distinct)(Seq.empty[String]): keys =>
+        tables.users.filter(_.usernameKey inSet keys).map(_.usernameKey).result,
+    )
+    .map(held =>
+      usernames.filter(name => held.contains(Username.key(name))).toList,
+    )
+
+  /**
     * Finds users by identifier, with no check of who may see whom: the host
     * must decide that first, and never expose this directly.
     *
@@ -252,7 +270,8 @@ final class UserStore(tables: AuthTables, db: Transactor):
     *
     * @return
     *   An effect producing the user, or `None` if the session is missing or
-    *   expired, or the account is suspended, whenever its session was opened.
+    *   expired, or the account is suspended or has a password someone else set,
+    *   whenever its session was opened.
     */
   def sessionUser(token: String): IO[Option[User]] = IO
     .realTime
@@ -268,7 +287,8 @@ final class UserStore(tables: AuthTables, db: Transactor):
           .on(_.userId === _.id)
           .map(_._2)
           .filterNot(user =>
-            tables.suspensions.filter(_.userId === user.id).exists,
+            tables.suspensions.filter(_.userId === user.id).exists ||
+            tables.temporaryPasswords.filter(_.userId === user.id).exists,
           )
           .result
           .headOption,
@@ -647,6 +667,7 @@ final class UserStore(tables: AuthTables, db: Transactor):
     codesOf(user).delete,
     allLinksOf(user).delete,
     suspension(user).delete,
+    temporary(user).delete,
     byId(user).delete,
   )
 
@@ -661,6 +682,33 @@ final class UserStore(tables: AuthTables, db: Transactor):
     */
   def suspended(user: Long): IO[Boolean] =
     db.run(suspension(user).exists.result)
+
+  /**
+    * Checks whether an account has a password someone else set, which its user
+    * must replace before signing in.
+    *
+    * @param user
+    *   The identifier of the account's user.
+    *
+    * @return
+    *   An effect producing whether it has.
+    */
+  def temporarilyPassworded(user: Long): IO[Boolean] =
+    db.run(temporary(user).exists.result)
+
+  /**
+    * The accounts among some users with a password someone else set, in the
+    * caller's transaction.
+    */
+  private[server] def temporaryAmong(users: Seq[Long]): DBIO[Set[Long]] = ifAny(
+    users.distinct,
+  )(Set.empty[Long]): wanted =>
+    tables
+      .temporaryPasswords
+      .filter(_.userId inSet wanted)
+      .map(_.userId)
+      .result
+      .map(_.toSet)
 
   /** The suspended accounts among some users, in the caller's transaction. */
   private[server] def suspendedAmong(users: Seq[Long]): DBIO[Set[Long]] = ifAny(
@@ -700,23 +748,36 @@ final class UserStore(tables: AuthTables, db: Transactor):
   /**
     * Sets a user's password for them, closing every session and emailed link,
     * as no old session or link should outlive it, but keeping their recovery
-    * codes, which are theirs.
+    * codes, which are theirs. The password is temporary: its user must replace
+    * it before signing in.
     */
   private[server] def setPassword
-    (user: Long, passwordHash: String)
+    (
+      user: Long,
+      passwordHash: String,
+      setter: Long,
+      at: Long,
+    )
     : DBIO[Unit] = DBIO.seq(
     byId(user).map(_.passwordHash).update(Some(passwordHash)),
     sessionsOf(user).delete,
     allLinksOf(user).delete,
+    temporary(user).delete,
+    tables.temporaryPasswords += TemporaryPasswordRow(user, setter, at),
   )
 
   /**
-    * Stores new users with their passwords' hashes, in order. Fails with
+    * Stores new users with their passwords' hashes, in order, each password
+    * temporary as someone else set it. Fails with
     * [[AuthRefusal.UsernamesTaken]] naming each username already held; one
     * taken meanwhile fails with a constraint violation instead.
     */
   private[server] def createAll
-    (accounts: Seq[(String, String)])
+    (
+      accounts: Seq[(String, String)],
+      setter: Long,
+      at: Long,
+    )
     : DBIO[Seq[User]] =
     val keys = accounts.map((username, _) => Username.key(username))
     for
@@ -737,6 +798,8 @@ final class UserStore(tables: AuthTables, db: Transactor):
       )
       ids <- tables.users.returning(tables.users.map(_.id)) ++=
         accounts.map((username, hash) => UserRow(0, username, Some(hash), None))
+      _ <- tables.temporaryPasswords ++=
+        ids.map(TemporaryPasswordRow(_, setter, at))
     yield ids.zip(accounts).map((id, account) => User(id, account._1))
 
   /** Fails with [[AuthRefusal.Suspended]] if the account is suspended. */
@@ -746,9 +809,9 @@ final class UserStore(tables: AuthTables, db: Transactor):
     .flatMap(held => refuseUnless(!held, AuthRefusal.Suspended))
 
   /**
-    * Sets a password, replacing every session with the given one and
-    * withdrawing every emailed link, so no old reset or confirmation link can
-    * undo the change.
+    * Sets a password of the user's own, replacing every session with the given
+    * one and withdrawing every emailed link, so no old reset or confirmation
+    * link can undo the change.
     */
   private def reset
     (
@@ -761,6 +824,7 @@ final class UserStore(tables: AuthTables, db: Transactor):
     byId(user).map(_.passwordHash).update(Some(passwordHash)),
     sessionsOf(user).delete,
     allLinksOf(user).delete,
+    temporary(user).delete,
     tables.sessions += SessionRow(Digest.of(token), user, expiresAt),
   )
 
@@ -805,6 +869,10 @@ final class UserStore(tables: AuthTables, db: Transactor):
       )
 
   private def byId(user: Long) = tables.users.filter(_.id === user)
+
+  private def temporary(user: Long) = tables
+    .temporaryPasswords
+    .filter(_.userId === user)
 
   private def suspension(user: Long) = tables
     .suspensions

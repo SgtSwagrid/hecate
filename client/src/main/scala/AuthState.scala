@@ -1,10 +1,11 @@
 package com.alecdorrington.hecate
 package client
 
+import com.alecdorrington.hecate.api.Protocol
 import com.alecdorrington.hecate.i18n.Wording
 import com.alecdorrington.hecate.model.{
   AuthRules, Credentials, EmailChange, EmailConfirmation, EmailStatus, Guest,
-  LinkTarget, PasswordChange, PasswordCheck, PasswordReset,
+  LinkTarget, PasswordChange, PasswordCheck, PasswordReplacement, PasswordReset,
   PasswordResetRequest, Recovery, RecoveryCodes, User, Welcome,
 }
 import com.raquo.laminar.api.L.*
@@ -44,6 +45,8 @@ final class AuthState(wording: Wording = Wording.english):
   private val recoveryCodesLeftVar: Var[Option[Int]] = Var(None)
 
   private val emailVar: Var[Option[EmailStatus]] = Var(None)
+
+  private val replacingVar: Var[Option[String]] = Var(None)
 
   /** Whether a [[recheck]] is in flight, so that a burst of refusals asks once. */
   private var rechecking = false
@@ -96,6 +99,13 @@ final class AuthState(wording: Wording = Wording.english):
     * server sends no email.
     */
   val email: Signal[Option[EmailStatus]] = emailVar.signal
+
+  /**
+    * The username of an account whose password someone else set, which a
+    * sign-in found, until its user replaces it ([[replacePassword]]) or gives
+    * up ([[stopReplacing]]); the host should ask them for one of their own.
+    */
+  val replacing: Signal[Option[String]] = replacingVar.signal
 
   locally:
     probe(0)
@@ -152,7 +162,41 @@ final class AuthState(wording: Wording = Wording.english):
   def signIn(username: String, password: String): Unit = signInWith(
     "/api/auth/sign-in",
     Credentials(username, password),
+    answering = {
+      case response if response.status == Protocol.replacementStatus =>
+        replacingVar.set(Some(username))
+    },
   )
+
+  /**
+    * Signs in to an account whose password someone else set, as [[replacing]]
+    * says, replacing it with the user's own.
+    *
+    * @param username
+    *   The username of the account.
+    *
+    * @param current
+    *   The password someone else set.
+    *
+    * @param replacement
+    *   The user's own password, which must differ from it.
+    */
+  def replacePassword
+    (
+      username: String,
+      current: String,
+      replacement: String,
+    )
+    : Unit = signInWith(
+    "/api/auth/password/replace",
+    PasswordReplacement(username, current, replacement),
+    signedIn = () => replacingVar.set(None),
+  )
+
+  /** Gives up replacing a password, returning to signing in. */
+  def stopReplacing(): Unit =
+    replacingVar.set(None)
+    clearMessages()
 
   /**
     * Follows an invite link as a new guest and signs them in. If the link leads
@@ -433,11 +477,26 @@ final class AuthState(wording: Wording = Wording.english):
       url: String,
       body: X,
       notice: Option[String] = None,
+      answering: PartialFunction[Response, Unit] = PartialFunction.empty,
+      signedIn: () => Unit = () => (),
     )
-    : Unit = perform(Fetch.post(url, body = body)): response =>
-    adopt[User](response): user =>
-      userVar.set(Some(user))
-      if notice.isDefined then noticeVar.set(notice)
+    : Unit =
+    clearMessages()
+    Outcome.tracked(
+      Outcome.unless(
+        Fetch.post(url, body = body),
+        answering.isDefinedAt,
+      ),
+      pendingVar,
+    ):
+      case Left(refusal)                     => answering(refusal)
+      case Right(Outcome.Answered(response)) => adopt[User](response): user =>
+          signedIn()
+          userVar.set(Some(user))
+          if notice.isDefined then noticeVar.set(notice)
+      case Right(Outcome.Refused(reason)) => errorVar.set(Some(reason))
+      case Right(Outcome.Unreachable(_))  =>
+        errorVar.set(Some(wording.unreachable))
 
   private def perform
     (request: EventStream[Response])

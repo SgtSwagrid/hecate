@@ -72,10 +72,17 @@ for full stack websites built on Slick, Cats Effect and Laminar, and optionally 
   `ManagingSelf`. While managed, `AccountStore.deleteOwn` refuses the user (`AccountManaged`). Consent to join a
   group may be given by whoever may change the person's account (`GroupStore.consentsFor`: `accept`,
   `decline`, and `offer`, so inviting an account one manages joins it). Every account change locks the
-  user's row first, the lock `GroupStore.named` takes for kind `user`. Suspension is the one extra table,
+  user's row first, the lock `GroupStore.named` takes for kind `user`. Creating accounts needs a group
+  the caller may change, is refused to guests (`GuestAccount`) and past `AuthPolicy.accountsPerHour`
+  (`AccountsCreatedRecently`, counted in memory), and checks names before hashing anything. A rename
+  concerns those who see the user through groups (`GroupStore.acquaintances`), not everyone. Suspension is a table of its own,
   `suspensions` (user id only): `sessionUser` ignores a suspended user's sessions whenever they were opened,
   and sign-in, recovery and reset links refuse `Suspended` only once the secret is right (the latter two
-  inside their transaction, so nothing is used up). Hecate adds tables but never changes existing ones, as
+  inside their transaction, so nothing is used up). A password someone else set (creation, a manager's
+  `setPassword`) is temporary, a row of `temporary_passwords` (who set it, when): `sessionUser` ignores the
+  account's sessions, sign-in refuses `PasswordChangeRequired` with `Protocol.replacementStatus` (403), and the
+  user signs in through `AuthService.replacePassword` with a different password of their own. `UserStore.reset`,
+  every path by which a user sets their own password, deletes the row. Hecate adds tables but never changes existing ones, as
   hosts pin its layout and it has no migrations.
   Email is off unless the host passes `AuthService` a `Mailing`: its `Mailer` (`Mailer.logged` for development, `smtp`'s
   `SmtpMailer`, or the host's own), the site's name, the pages the links lead to (built from the host's own base URL, never the `Host`

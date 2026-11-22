@@ -487,15 +487,25 @@ anyone, so a host that keeps its users' private work private keeps it so from th
 
 Setting a password signs out every session of the account and ends every link sent it by email,
 but leaves its recovery codes, which are its user's; it is reported as `Affected.PasswordSet`, so
-that you can tell the person who did it. A suspended account cannot be signed in to, by password,
+that you can tell the person who did it. A password someone else set, whether by creating the
+account or since, is *temporary*: nobody can sign in with it. Signing in answers
+`Protocol.replacementStatus` (403) rather than 400 (`PasswordChangeRequired`), and the user signs
+in instead with `POST /api/auth/password/replace`, giving the password they were given and one of
+their own, which must differ from it (`PasswordReused`); `AuthState.replacing` says when to ask
+for it. So whoever set the password knows it only until the account's user first signs in, and
+cannot use it themselves. Recovering, resetting or changing a password makes it the user's own
+too; `ManagedAccount.temporaryPassword` tells managers whose is still temporary. A suspended account cannot be signed in to, by password,
 recovery code or emailed link, each refused as `Suspended` only once the secret given is right, and
-its sessions end; the one table this adds, `suspensions`, holds a row for each.
+its sessions end. Suspensions and temporary passwords are the two tables this adds,
+`suspensions` and `temporary_passwords`, each a row per account.
 
 `POST /api/accounts` creates accounts in bulk, all or none, up to `Protocol.maxAccountsPerRequest`
 at once: each a username and, if you like, a password (one is generated otherwise, and every
-password is answered this once, never stored unhashed). They are owned by the caller, or by a
-principal the caller names and may address (a group of colleagues, say), and join at once a group
-the caller may change. Inviting an account you may change to a group you may change joins it at
+password is answered this once, never stored unhashed). They join at once a group the caller may
+change, and are owned by the caller, or by a principal the caller names and may address (a group
+of colleagues, say). A guest may create none, and nobody more in an hour than
+`AuthPolicy.accountsPerHour` (300 by default, counted in memory); taken usernames are refused
+before any password is hashed. Inviting an account you may change to a group you may change joins it at
 once too, as you agree for both sides. A username taken, or given twice, is refused naming each
 (`UsernamesTaken`).
 
@@ -671,6 +681,7 @@ ask again who is signed in whenever one is refused.
 |----------|-----------------------------------------|-------------------------------------------|
 | `POST`   | `/api/auth/register`                    | Create an account and sign in.            |
 | `POST`   | `/api/auth/sign-in`                     | Sign in.                                  |
+| `POST`   | `/api/auth/password/replace`            | Sign in, replacing a temporary password.  |
 | `POST`   | `/api/auth/claim`                       | Keep a guest's account, with a password.  |
 | `POST`   | `/api/auth/sign-out`                    | Sign out.                                 |
 | `GET`    | `/api/auth/me`                          | Identify the signed-in user.              |

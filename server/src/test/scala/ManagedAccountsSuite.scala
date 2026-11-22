@@ -5,8 +5,9 @@ import Fixtures.{cheap, enrol}
 import cats.effect.{IO, Ref}
 import com.alecdorrington.hecate.model.{
   Access, AccountCreation, AuthRefusal, CreatedAccount, Credentials,
-  GroupDetails, Holder, Manager, NewAccount, PasswordChange, PasswordSetting,
-  Principal, Recovery, Resource, User, UsernameChange,
+  GroupDetails, Holder, Manager, NewAccount, PasswordChange,
+  PasswordReplacement, PasswordSetting, Principal, Recovery, Resource, User,
+  UsernameChange,
 }
 import munit.CatsEffectSuite
 import slick.dbio.DBIO
@@ -25,22 +26,23 @@ class ManagedAccountsSuite extends CatsEffectSuite:
     served("create"): world =>
       import world.*
       for
-        teacher <- signUp("teacher")
-        team    <- groups.create(teacher.id, GroupDetails("Class"))
-        made    <- service.create(
-          teacher,
+        coach <- signUp("coach")
+        team  <- groups.create(coach.id, GroupDetails("Team"))
+        made  <- service.create(
+          coach,
           AccountCreation(
             List(
               NewAccount("Ada"),
               NewAccount("Ben", Some("chosen-secret")),
             ),
-            Some(team.id),
+            team.id,
           ),
         )
         created = made.toOption.get
-        listed <- service.list(teacher)
-        inside <- groups.managed(teacher.id)
+        listed <- service.list(coach)
+        inside <- groups.managed(coach.id)
         signed <- created.traverseSignIn(auth)
+        owned  <- created.traverseReplace(auth)
         told   <- reported
       yield
         assertEquals(
@@ -58,8 +60,8 @@ class ManagedAccountsSuite extends CatsEffectSuite:
           listed.map(_.flatMap(_.managers)),
           Right(List.fill(2)(Manager(
             Holder(
-              Principal.Person(teacher.id),
-              Some("teacher"),
+              Principal.Person(coach.id),
+              Some("coach"),
             ),
             Access.Own,
           ))),
@@ -68,52 +70,53 @@ class ManagedAccountsSuite extends CatsEffectSuite:
           inside.flatMap(_.members).map(_.username).toSet,
           Set("Ada", "Ben"),
         )
-        assertEquals(signed, List(true, true))
+        // Each must first choose a password of its own.
+        assertEquals(signed, List(false, false))
+        assertEquals(owned, List(true, true))
+        assertEquals(
+          listed.map(_.map(_.temporaryPassword)),
+          Right(List(true, true)),
+        )
         assert(told.contains(
-          Affected.Accounts(Set(teacher.id) ++ created.map(_.user.id)),
+          Affected.Accounts(Set(coach.id) ++ created.map(_.user.id)),
         ))
 
   test("creation refuses taken and repeated names, and groups not changeable"):
     served("refusals"): world =>
       import world.*
       for
-        teacher  <- signUp("teacher")
+        coach    <- signUp("coach")
         stranger <- signUp("stranger")
         theirs   <- groups.create(stranger.id, GroupDetails("Theirs"))
-        taken    <- service.create(
-          teacher,
-          AccountCreation(List(
-            NewAccount("STRANGER"),
-            NewAccount("Cy"),
-          )),
+        taken    <- createIn(
+          coach,
+          NewAccount("STRANGER"),
+          NewAccount("Cy"),
         )
-        repeated <- service.create(
-          teacher,
-          AccountCreation(List(NewAccount("Dee"), NewAccount("dee "))),
+        repeated <- createIn(
+          coach,
+          NewAccount("Dee"),
+          NewAccount("dee "),
         )
-        tooMany <- service.create(
-          teacher,
-          AccountCreation(List.tabulate(201)(n => NewAccount(s"n$n"))),
+        tooMany <- createIn(
+          coach,
+          List.tabulate(201)(n => NewAccount(s"n$n"))*,
         )
         grouped <- service.create(
-          teacher,
-          AccountCreation(
-            List(NewAccount("Eve")),
-            Some(theirs.id),
-          ),
+          coach,
+          AccountCreation(List(NewAccount("Eve")), theirs.id),
         )
+        mine  <- groups.create(coach.id, GroupDetails("Mine"))
         owned <- service.create(
-          teacher,
+          coach,
           AccountCreation(
             List(NewAccount("Fay")),
+            mine.id,
             owner = Some(Principal.Person(stranger.id)),
           ),
         )
-        short <- service.create(
-          teacher,
-          AccountCreation(List(NewAccount("Gus", Some("short")))),
-        )
-        none <- service.list(teacher)
+        short <- createIn(coach, NewAccount("Gus", Some("short")))
+        none  <- service.list(coach)
       yield
         assertEquals(
           taken,
@@ -142,27 +145,59 @@ class ManagedAccountsSuite extends CatsEffectSuite:
         // Nothing was created by any of them.
         assertEquals(none, Right(List.empty))
 
+  test("a guest creates no accounts, and nobody more than an hour allows"):
+    served(
+      "limits",
+      AuthPolicy(hashIterations = 1000, accountsPerHour = 3),
+    ): world =>
+      import world.*
+      for
+        coach <- signUp("coach")
+        guest = User(coach.id + 100, "Visitor", guest = true)
+        refused <- service.create(guest, AccountCreation(Nil, 1))
+        first   <- createIn(
+          coach,
+          NewAccount("Ada"),
+          NewAccount("Ben"),
+        )
+        second <- createIn(
+          coach,
+          NewAccount("Cy"),
+          NewAccount("Dee"),
+        )
+        third <- createIn(coach, NewAccount("Eve"))
+      yield
+        assertEquals(
+          refused,
+          Left(AuthRefusal.GuestAccount),
+        )
+        assert(first.isRight)
+        assertEquals(
+          second,
+          Left(AuthRefusal.AccountsCreatedRecently(3)),
+        )
+        // A refused request counts for nothing.
+        assert(third.isRight)
+
   test("an editor renames and sets passwords; a viewer or stranger cannot"):
     served("edit"): world =>
       import world.*
       for
-        teacher  <- signUp("teacher")
+        coach    <- signUp("coach")
         helper   <- signUp("helper")
         stranger <- signUp("stranger")
-        made     <- service.create(
-          teacher,
-          AccountCreation(List(NewAccount("Ada"))),
-        )
+        made     <- createIn(coach, NewAccount("Ada"))
         ada = made.toOption.get.head.user
         _ <- grant(
           Resource.user(ada.id),
           helper,
           Access.View,
         )
-        session <- signIn(
+        session <- replace(
           auth,
           "Ada",
           made.toOption.get.head.password,
+          "ada-own-secret",
         )
         viewed <- service.rename(helper, ada.id, UsernameChange("Nope"))
         hidden <- service.rename(
@@ -170,25 +205,27 @@ class ManagedAccountsSuite extends CatsEffectSuite:
           ada.id,
           UsernameChange("Nope"),
         )
-        clash <- service.rename(
-          teacher,
-          ada.id,
-          UsernameChange("HELPER"),
-        )
-        renamed <- service.rename(
-          teacher,
-          ada.id,
-          UsernameChange("Ada L"),
-        )
-        _   <- reported
-        set <- service.setPassword(
-          teacher,
+        clash   <- service.rename(coach, ada.id, UsernameChange("HELPER"))
+        renamed <- service.rename(coach, ada.id, UsernameChange("Ada L"))
+        _       <- reported
+        set     <- service.setPassword(
+          coach,
           ada.id,
           PasswordSetting("new-secret"),
         )
-        told  <- reported
-        ended <- auth.current(Some(session.get))
-        again <- signIn(auth, "ada l", "new-secret")
+        told   <- reported
+        ended  <- auth.current(Some(session.get))
+        theirs <- auth.signIn(Credentials("ada l", "new-secret"))
+        reused <- auth.replacePassword(
+          PasswordReplacement("ada l", "new-secret", "new-secret"),
+        )
+        again <- replace(
+          auth,
+          "ada l",
+          "new-secret",
+          "ada-newer-secret",
+        )
+        later <- signIn(auth, "Ada L", "ada-newer-secret")
       yield
         assertEquals(
           viewed,
@@ -202,34 +239,49 @@ class ManagedAccountsSuite extends CatsEffectSuite:
         assertEquals(renamed, Right(User(ada.id, "Ada L")))
         assertEquals(set, Right(()))
         // The person is told who set it, and every session of theirs ends.
-        assert(told.contains(Affected.PasswordSet(ada.id, teacher.id)))
+        assert(told.contains(Affected.PasswordSet(ada.id, coach.id)))
         assertEquals(ended, Right(None))
+        // A manager's password signs nobody in: its user replaces it first.
+        assertEquals(
+          theirs.map(_._1),
+          Left(AuthRefusal.PasswordChangeRequired),
+        )
+        assertEquals(
+          reused.map(_._1),
+          Left(AuthRefusal.PasswordReused),
+        )
         assert(again.isDefined)
+        assert(later.isDefined)
 
   test("a suspended account cannot be signed in to, by password or code"):
     served("suspend"): world =>
       import world.*
       for
-        teacher <- signUp("teacher")
-        made    <- service.create(
-          teacher,
-          AccountCreation(List(NewAccount("Ada", Some("ada-secret")))),
+        coach <- signUp("coach")
+        made  <- createIn(
+          coach,
+          NewAccount("Ada", Some("ada-secret")),
         )
         ada = made.toOption.get.head.user
-        session <- signIn(auth, "Ada", "ada-secret")
-        codes   <- auth.generateRecoveryCodes(ada, "ada-secret")
-        _       <- service.suspend(teacher, ada.id, true)
-        ended   <- auth.current(Some(session.get))
-        right   <- auth.signIn(Credentials("Ada", "ada-secret"))
-        wrong   <- auth.signIn(Credentials("Ada", "not-it-at-all"))
-        regain  <- auth.recover(Recovery(
+        session <- replace(
+          auth,
+          "Ada",
+          "ada-secret",
+          "ada-own-secret",
+        )
+        codes  <- auth.generateRecoveryCodes(ada, "ada-own-secret")
+        _      <- service.suspend(coach, ada.id, true)
+        ended  <- auth.current(Some(session.get))
+        right  <- auth.signIn(Credentials("Ada", "ada-own-secret"))
+        wrong  <- auth.signIn(Credentials("Ada", "not-it-at-all"))
+        regain <- auth.recover(Recovery(
           "Ada",
           codes.toOption.get.codes.head,
           "another-secret",
         ))
-        listed <- service.list(teacher)
-        _      <- service.suspend(teacher, ada.id, false)
-        back   <- signIn(auth, "Ada", "ada-secret")
+        listed <- service.list(coach)
+        _      <- service.suspend(coach, ada.id, false)
+        back   <- signIn(auth, "Ada", "ada-own-secret")
         left   <- auth.recoveryCodesLeft(ada)
       yield
         assertEquals(ended, Right(None))
@@ -258,25 +310,22 @@ class ManagedAccountsSuite extends CatsEffectSuite:
     served("invitations"): world =>
       import world.*
       for
-        teacher  <- signUp("teacher")
+        coach    <- signUp("coach")
         other    <- signUp("other")
         stranger <- signUp("stranger")
-        made     <- service.create(
-          teacher,
-          AccountCreation(List(NewAccount("Ada"))),
-        )
+        made     <- createIn(coach, NewAccount("Ada"))
         ada = made.toOption.get.head.user
         club   <- groups.create(other.id, GroupDetails("Club"))
-        mine   <- groups.create(teacher.id, GroupDetails("Mine"))
+        mine   <- groups.create(coach.id, GroupDetails("Mine"))
         _      <- groups.invite(other.id, club.id, "Ada")
-        listed <- service.list(teacher)
+        listed <- service.list(coach)
         waiting = listed.toOption.get.head.invitations
         refused <- groupService.accept(stranger, waiting.head.id)
         _       <- reported
-        taken   <- groupService.accept(teacher, waiting.head.id)
+        taken   <- groupService.accept(coach, waiting.head.id)
         told    <- reported
         // Inviting an account one may change into a group one may change joins.
-        _       <- groups.invite(teacher.id, mine.id, "Ada")
+        _       <- groups.invite(coach.id, mine.id, "Ada")
         joined  <- groups.memberships(ada.id)
         pending <- groups.invitations(ada.id)
       yield
@@ -290,10 +339,10 @@ class ManagedAccountsSuite extends CatsEffectSuite:
         )
         assertEquals(taken, Right(()))
         // Whoever manages the account sees what awaits it, so is told too.
-        assert(told.exists(tells(teacher, ada)))
+        assert(told.exists(tells(coach, ada)))
         assertEquals(
           joined.map(_.group.name).toSet,
-          Set("Club", "Mine"),
+          Set("Team of coach", "Club", "Mine"),
         )
         assertEquals(pending, List.empty)
 
@@ -301,11 +350,11 @@ class ManagedAccountsSuite extends CatsEffectSuite:
     served("own"): world =>
       import world.*
       for
-        teacher <- signUp("teacher")
-        helper  <- signUp("helper")
-        made    <- service.create(
-          teacher,
-          AccountCreation(List(NewAccount("Ada", Some("ada-secret")))),
+        coach  <- signUp("coach")
+        helper <- signUp("helper")
+        made   <- createIn(
+          coach,
+          NewAccount("Ada", Some("ada-secret")),
         )
         ada = made.toOption.get.head.user
         _ <- grant(
@@ -320,7 +369,7 @@ class ManagedAccountsSuite extends CatsEffectSuite:
         selfDelete <- auth.deleteAccount(ada, "ada-secret-2")
         managers   <- service.managers(ada)
         editDelete <- service.delete(helper, ada.id)
-        released   <- service.release(teacher, ada.id)
+        released   <- service.release(coach, ada.id)
         after      <- service.managers(ada)
         free       <- auth.deleteAccount(ada, "ada-secret-2")
       yield
@@ -334,8 +383,8 @@ class ManagedAccountsSuite extends CatsEffectSuite:
             _.map(manager => (manager.holder.principal, manager.access)),
           ),
           Right(List(
-            Principal.Person(teacher.id) -> Access.Own,
-            Principal.Person(helper.id)  -> Access.Edit,
+            Principal.Person(coach.id)  -> Access.Own,
+            Principal.Person(helper.id) -> Access.Edit,
           )),
         )
         assertEquals(
@@ -350,15 +399,12 @@ class ManagedAccountsSuite extends CatsEffectSuite:
     served("delete"): world =>
       import world.*
       for
-        teacher <- signUp("teacher")
-        made    <- service.create(
-          teacher,
-          AccountCreation(List(NewAccount("Ada"))),
-        )
+        coach <- signUp("coach")
+        made  <- createIn(coach, NewAccount("Ada"))
         ada = made.toOption.get.head.user
-        deleted <- service.delete(teacher, ada.id)
+        deleted <- service.delete(coach, ada.id)
         gone    <- users.find(ada.id)
-        listed  <- service.list(teacher)
+        listed  <- service.list(coach)
         held    <- grants.over(Resource.user(ada.id))
       yield
         assertEquals(deleted, Right(()))
@@ -370,29 +416,29 @@ class ManagedAccountsSuite extends CatsEffectSuite:
     served("self"): world =>
       import world.*
       for
-        teacher <- signUp("teacher")
-        member  <- signUp("member")
-        staff   <- groups.create(teacher.id, GroupDetails("Staff"))
-        _       <- enrol(groups, teacher, staff.id, member)
-        _       <- groups.join(teacher.id, staff.id)
-        _       <- grant(
+        coach  <- signUp("coach")
+        member <- signUp("member")
+        staff  <- groups.create(coach.id, GroupDetails("Staff"))
+        _      <- enrol(groups, coach, staff.id, member)
+        _      <- groups.join(coach.id, staff.id)
+        _      <- grant(
           Resource.user(member.id),
           Principal.Group(staff.id),
           Access.Own,
         )
         own      <- permissions.access(member.id, Resource.user(member.id))
-        theirs   <- permissions.access(teacher.id, Resource.user(member.id))
+        theirs   <- permissions.access(coach.id, Resource.user(member.id))
         listed   <- service.list(member)
         selfEdit <- service.suspend(member, member.id, true)
         selfMade <- sharing.grant(
-          teacher,
-          Resource.user(teacher.id),
-          Principal.Person(teacher.id),
+          coach,
+          Resource.user(coach.id),
+          Principal.Person(coach.id),
           Access.Own,
         )
         linked <- sharing.setLink(
           member,
-          Resource.user(teacher.id),
+          Resource.user(coach.id),
           Access.View,
         )
       yield
@@ -416,40 +462,37 @@ class ManagedAccountsSuite extends CatsEffectSuite:
     served("transfer"): world =>
       import world.*
       for
-        teacher   <- signUp("teacher")
+        coach     <- signUp("coach")
         colleague <- signUp("colleague")
-        staff     <- groups.create(teacher.id, GroupDetails("Staff"))
-        _         <- enrol(groups, teacher, staff.id, colleague)
-        made      <- service.create(
-          teacher,
-          AccountCreation(List(NewAccount("Ada"))),
-        )
+        staff     <- groups.create(coach.id, GroupDetails("Staff"))
+        _         <- enrol(groups, coach, staff.id, colleague)
+        made      <- createIn(coach, NewAccount("Ada"))
         ada     = made.toOption.get.head.user
         account = Resource.user(ada.id)
         _ <- sharing.grant(
-          teacher,
+          coach,
           account,
           Principal.Person(colleague.id),
           Access.Own,
         )
         _ <- reported
         _ <- sharing.revoke(
-          teacher,
+          coach,
           account,
-          Principal.Person(teacher.id),
+          Principal.Person(coach.id),
         )
         told <- reported
         hers <- service.list(colleague)
-        his  <- service.list(teacher)
+        his  <- service.list(coach)
       yield
         assertEquals(
           hers.map(_.map(_.user)),
           Right(List(ada)),
         )
         assertEquals(his, Right(List.empty))
-        assert(told.contains(
-          Affected.Accounts(Set(colleague.id, teacher.id, ada.id)),
-        ))
+        assert(
+          told.contains(Affected.Accounts(Set(colleague.id, coach.id, ada.id))),
+        )
 
 object ManagedAccountsSuite:
 
@@ -473,6 +516,33 @@ object ManagedAccountsSuite:
         ).map(_.isDefined),
       )
 
+    /** Whether each account signs in replacing its password with its own. */
+    private def traverseReplace(auth: AuthService): IO[List[Boolean]] =
+      import cats.syntax.all.*
+      created.traverse(account =>
+        replace(
+          auth,
+          account.user.username,
+          account.password,
+          s"${ account.password }-own",
+        ).map(_.isDefined),
+      )
+
+  /**
+    * The session token signing in opens, replacing a password someone else set
+    * with one's own, or `None` if refused.
+    */
+  private def replace
+    (
+      auth: AuthService,
+      username: String,
+      handedOut: String,
+      own: String,
+    )
+    : IO[Option[String]] = auth
+    .replacePassword(PasswordReplacement(username, handedOut, own))
+    .map(_.toOption.map(_._2.token))
+
   /** The session token signing in opens, or `None` if refused. */
   private def signIn
     (
@@ -489,6 +559,7 @@ object ManagedAccountsSuite:
     (
       val db: TestDb,
       told: Ref[IO, List[Affected]],
+      policy: AuthPolicy,
     ):
 
     private def tell(change: Affected): IO[Unit] = told.update(change :: _)
@@ -510,7 +581,7 @@ object ManagedAccountsSuite:
 
     val auth: AuthService = AuthService(
       users,
-      cheap,
+      policy,
       accounts = Some(accounts),
       affected = tell,
     )
@@ -522,7 +593,7 @@ object ManagedAccountsSuite:
       groups,
       grants,
       Some(accounts),
-      cheap,
+      policy,
       affected = tell,
     )
 
@@ -538,6 +609,21 @@ object ManagedAccountsSuite:
     )
 
     def signUp(name: String): IO[User] = Fixtures.signUp(auth, name).map(_._1)
+
+    /** Creates accounts as the user, into a group of theirs made for them. */
+    def createIn
+      (user: User, accounts: NewAccount*)
+      : IO[Either[AuthRefusal, List[CreatedAccount]]] = groups
+      .create(
+        user.id,
+        GroupDetails(s"Team of ${ user.username }"),
+      )
+      .flatMap(group =>
+        service.create(
+          user,
+          AccountCreation(accounts.toList, group.id),
+        ),
+      )
 
     def grant
       (
@@ -562,8 +648,14 @@ object ManagedAccountsSuite:
     /** Whatever has been told since last asked, oldest first, forgetting it. */
     def reported: IO[List[Affected]] = told.getAndSet(List.empty).map(_.reverse)
 
-  private def served(name: String)(check: World => IO[Unit]): IO[Unit] = TestDb
+  private def served
+    (name: String, policy: AuthPolicy = cheap)
+    (check: World => IO[Unit])
+    : IO[Unit] = TestDb
     .open(s"managed-$name")
     .use(db =>
-      Ref.of[IO, List[Affected]](List.empty).map(World(db, _)).flatMap(check),
+      Ref
+        .of[IO, List[Affected]](List.empty)
+        .map(World(db, _, policy))
+        .flatMap(check),
     )

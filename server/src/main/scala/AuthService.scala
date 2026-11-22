@@ -6,8 +6,8 @@ import cats.effect.std.Console
 import cats.syntax.all.*
 import com.alecdorrington.hecate.model.{
   AuthRefusal, AuthRules, Credentials, EmailChange, EmailConfirmation,
-  EmailStatus, PasswordChange, PasswordReset, PasswordResetRequest, Recovery,
-  RecoveryCodes, User,
+  EmailStatus, PasswordChange, PasswordReplacement, PasswordReset,
+  PasswordResetRequest, Recovery, RecoveryCodes, User,
 }
 import java.security.SecureRandom
 import java.util.Base64
@@ -160,6 +160,31 @@ final class AuthService
         Bounds.password(credentials.password),
       )(authenticate(credentials)),
     )
+
+  /**
+    * Signs in to an account whose password someone else set, replacing it with
+    * the user's own, which must differ from it, and opens a session. Checked as
+    * sign-in is, as slowly for an unknown username, and refused as
+    * [[AuthRefusal.CredentialsIncorrect]] alike. An account whose password is
+    * its user's own may be signed in to this way too, changing it.
+    *
+    * @param replacement
+    *   The username, the password someone else set, and the user's own.
+    *
+    * @return
+    *   An answer with the user and the session's cookie, or a refusal.
+    */
+  def replacePassword
+    (replacement: PasswordReplacement)
+    : Answer[(User, SessionCookie)] = failures
+    .attemptRefusable(
+      checked(
+        Bounds.name(replacement.username),
+        Bounds.password(replacement.current),
+        policy.passwordProblem(replacement.replacement),
+      )(replacing(replacement)),
+    )
+    .flatTap(done => tell(done.toOption.map(_._1.id), account))
 
   /**
     * Closes a session.
@@ -502,12 +527,50 @@ final class AuthService
     .flatMap(verified(_, credentials.password))
     .flatMap:
       case None      => IO.pure(Left(AuthRefusal.CredentialsIncorrect))
-      case Some(row) => users
-          .suspended(row.id)
-          .ifM(
-            IO.pure(Left(AuthRefusal.Suspended)),
-            openSession(row.toUser).map(Right(_)),
-          )
+      case Some(row) => refusedAfterPassword(row.id).flatMap:
+          case Some(refusal) => IO.pure(Left(refusal))
+          case None          => openSession(row.toUser).map(Right(_))
+
+  /**
+    * Why an account whose password was just given right may not be signed in to
+    * yet: it is suspended, or its password was set by someone else.
+    */
+  private def refusedAfterPassword(user: Long): IO[Option[AuthRefusal]] = users
+    .suspended(user)
+    .ifM(
+      IO.pure(Some(AuthRefusal.Suspended)),
+      users
+        .temporarilyPassworded(user)
+        .map(Option.when(_)(AuthRefusal.PasswordChangeRequired)),
+    )
+
+  /**
+    * Replaces a password once the given one is right, as signing in checks it,
+    * the replacement hashed first so that timing says nothing.
+    */
+  private def replacing
+    (replacement: PasswordReplacement)
+    : Answer[(User, SessionCookie)] =
+    for
+      hash  <- hashed(replacement.replacement)
+      found <- users
+        .findByUsername(replacement.username.trim)
+        .flatMap(verified(_, replacement.current))
+      answer <- found match
+        case None      => IO.pure(Left(AuthRefusal.CredentialsIncorrect))
+        case Some(row) =>
+          if replacement.replacement == replacement.current then
+            IO.pure(Left(AuthRefusal.PasswordReused))
+          else
+            users
+              .suspended(row.id)
+              .ifM(
+                IO.pure(Left(AuthRefusal.Suspended)),
+                opening(
+                  users.resetPassword(row.id, hash, _, _),
+                ).map((_, cookie) => Right((row.toUser, cookie))),
+              )
+    yield answer
 
   private def lookup(token: Option[String]): IO[Option[User]] = token
     .flatTraverse(users.sessionUser)
@@ -793,6 +856,10 @@ object AuthService:
   *   Whether someone not signed in may follow an invite link as a guest (see
   *   [[AuthService.createGuest]]). A guest who does not claim their account
   *   cannot reach it once their session ends.
+  *
+  * @param accountsPerHour
+  *   The most accounts one user may create for others in an hour (see
+  *   [[AccountService.create]]).
   */
 final case class AuthPolicy
   (
@@ -804,6 +871,7 @@ final case class AuthPolicy
     mailIntervalSeconds: Long = 60,
     addressMailsPerHour: Int = 5,
     guests: Boolean = false,
+    accountsPerHour: Int = 300,
   ):
 
   /** The lifetime of a session, in milliseconds. */

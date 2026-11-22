@@ -9,9 +9,9 @@ import com.alecdorrington.hecate.model.{
   EmailConfirmation, EmailStatus, Gated, Grant, Group, GroupDetails, Guest,
   Holder, Invitation, Invitee, InviteLink, JoinableGroup, LinkPreview,
   LinkTarget, ManagedAccount, ManagedGroup, Manager, Membership, NewAccount,
-  PasswordChange, PasswordCheck, PasswordReset, PasswordResetRequest,
-  PasswordSetting, Permitted, Principal, Recovery, RecoveryCodes, Resource,
-  User, UsernameChange, Welcome,
+  PasswordChange, PasswordCheck, PasswordReplacement, PasswordReset,
+  PasswordResetRequest, PasswordSetting, Permitted, Principal, Recovery,
+  RecoveryCodes, Resource, User, UsernameChange, Welcome,
 }
 import sttp.tapir.{FieldName, Schema, SchemaType, Validator}
 
@@ -155,6 +155,11 @@ object Schemas:
 
   given Schema[PasswordChange] = Schema
     .derived[PasswordChange]
+    .modify(_.current)(_ => bounded(maxPasswordLength))
+    .modify(_.replacement)(_ => bounded(maxPasswordLength))
+
+  given Schema[PasswordReplacement] = Schema
+    .derived[PasswordReplacement]
     .modify(_.current)(_ => bounded(maxPasswordLength))
     .modify(_.replacement)(_ => bounded(maxPasswordLength))
 

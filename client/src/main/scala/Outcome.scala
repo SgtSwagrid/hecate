@@ -47,18 +47,44 @@ object Outcome:
     *   A stream of its one outcome.
     */
   def of(request: EventStream[Response]): EventStream[Outcome] = request
-    .map(response =>
-      if response.status >= 400 then Refused(response.data)
-      else Answered(response),
-    )
+    .map(read)
     .recover { case failure => Some(Unreachable(failure.getMessage)) }
 
-  private[client] def tracked
+  /**
+    * Reads the outcome of a request, but for the refusals its caller answers
+    * itself, which are left to it unread.
+    *
+    * @param request
+    *   The stream of the request's one reply.
+    *
+    * @param answers
+    *   Whether the caller answers a refusal itself.
+    *
+    * @return
+    *   A stream of its one outcome, or of the refusal left to the caller.
+    */
+  def unless
     (
-      outcome: EventStream[Outcome],
+      request: EventStream[Response],
+      answers: Response => Boolean,
+    )
+    : EventStream[Either[Response, Outcome]] = request
+    .map(response =>
+      if response.status >= 400 && answers(response) then Left(response)
+      else Right(read(response)),
+    )
+    .recover { case failure => Some(Right(Unreachable(failure.getMessage))) }
+
+  private def read(response: Response): Outcome =
+    if response.status >= 400 then Refused(response.data)
+    else Answered(response)
+
+  private[client] def tracked[X]
+    (
+      outcome: EventStream[X],
       pending: Var[Boolean],
     )
-    (handle: Outcome => Unit)
+    (handle: X => Unit)
     : Unit =
     pending.set(true)
     once(outcome): outcome =>

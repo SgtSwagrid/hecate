@@ -4,7 +4,7 @@ package tapir
 
 import cats.effect.IO
 import com.alecdorrington.hecate.i18n.Wording
-import com.alecdorrington.hecate.model.{Caller, User}
+import com.alecdorrington.hecate.model.{AuthRefusal, Caller, User}
 import com.alecdorrington.hecate.server.tapir.AuthEndpoints.cookie
 import com.alecdorrington.hecate.tapir.AuthApi
 import sttp.model.headers.Cookie.SameSite
@@ -38,9 +38,32 @@ final class AuthEndpoints
     credentials => signedIn(auth.claim(user, credentials)),
   )
 
-  /** The server endpoint for [[AuthApi.signIn]]. */
-  lazy val signIn: ServerEndpoint[Any, IO] =
-    signingIn(AuthApi.signIn)(auth.signIn)
+  /**
+    * The server endpoint for [[AuthApi.signIn]], whose refusal to an account
+    * whose password must first be replaced has a status of its own.
+    */
+  lazy val signIn: ServerEndpoint[Any, IO] = AuthApi
+    .signIn
+    .serverLogic((credentials, locale) =>
+      auth
+        .signIn(credentials)
+        .map(
+          _.left
+            .map(refusal =>
+              (
+                AuthApi.signInStatus(
+                  refusal == AuthRefusal.PasswordChangeRequired,
+                ),
+                wording(locale).phrase(refusal),
+              ),
+            )
+            .map((user, session) => (user, cookie(session))),
+        ),
+    )
+
+  /** The server endpoint for [[AuthApi.replacePassword]]. */
+  lazy val replacePassword: ServerEndpoint[Any, IO] =
+    signingIn(AuthApi.replacePassword)(auth.replacePassword)
 
   /** The server endpoint for [[AuthApi.signOut]]. */
   lazy val signOut: ServerEndpoint[Any, IO] = AuthApi
@@ -115,6 +138,7 @@ final class AuthEndpoints
     register,
     claim,
     signIn,
+    replacePassword,
     signOut,
     current,
     rules,
