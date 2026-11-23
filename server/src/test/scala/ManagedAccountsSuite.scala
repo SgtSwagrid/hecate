@@ -179,28 +179,39 @@ class ManagedAccountsSuite extends CatsEffectSuite:
         // A refused request counts for nothing.
         assert(third.isRight)
 
-  test("a request refused for its names still counts towards the hour"):
+  test("names checked count apart from accounts made, against more an hour"):
     served(
       "limits-taken",
-      AuthPolicy(hashIterations = 1000, accountsPerHour = 3),
+      AuthPolicy(
+        hashIterations = 1000,
+        accountsPerHour = 3,
+        namesCheckedPerHour = 5,
+      ),
     ): world =>
       import world.*
       for
         coach <- signUp("coach")
         first <- createIn(coach, NewAccount("Ada"))
-        taken <- createIn(coach, NewAccount("Ada"))
-        third <- createIn(coach, NewAccount("Ben"))
-        over  <- createIn(coach, NewAccount("Cy"))
+        taken <- createIn(
+          coach,
+          NewAccount("Ada"),
+          NewAccount("Ben"),
+        )
+        retried <- createIn(coach, NewAccount("Ben"))
+        third   <- createIn(coach, NewAccount("Cy"))
+        tooMany <- createIn(coach, NewAccount("Dee"))
       yield
         assert(first.isRight)
         assertEquals(
           taken,
           Left(AuthRefusal.UsernamesTaken(List("Ada"))),
         )
+        // A refusal for its names costs the corrected request no accounts.
+        assert(retried.isRight)
         assert(third.isRight)
-        // Without the refused request, Cy would be the third this hour.
+        // Five names have been checked this hour, and Dee would be the sixth.
         assertEquals(
-          over,
+          tooMany,
           Left(AuthRefusal.AccountsCreatedRecently(3)),
         )
 

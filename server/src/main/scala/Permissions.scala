@@ -85,10 +85,11 @@ final class Permissions(groups: GroupStore, grants: GrantStore):
   def levels(user: Long, kind: String): IO[Map[Long, Access]] =
     grants.run(levelsAt(user, kind))
 
-  /** As [[levels]], in the caller's transaction. */
-  private[server] def levelsAt
-    (user: Long, kind: String)
-    : DBIO[Map[Long, Access]] = groups
+  /**
+    * As [[levels]], in the caller's transaction, so that a host can read them
+    * together with what it locks.
+    */
+  def levelsAt(user: Long, kind: String): DBIO[Map[Long, Access]] = groups
     .principalsAt(user)
     .flatMap(grants.levelsAt(_, kind))
     .map(levels => if kind == Resource.userKind then levels - user else levels)
