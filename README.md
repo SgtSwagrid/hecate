@@ -509,8 +509,10 @@ at once: each a username and, if you like, a password (one is generated otherwis
 password is answered this once, never stored unhashed). They join at once a group the caller may
 change, and are owned by the caller, or by a principal the caller names and may address (a group
 of colleagues, say). A guest may create none, and nobody more in an hour than
-`AuthPolicy.accountsPerHour` (300 by default, counted in memory, a request refused for its names
-included, as the refusal names them); taken usernames are refused before any password is hashed. Inviting an account you may change to a group you may change joins it at
+`AuthPolicy.accountsPerHour` (300 by default), and nobody may ask under more usernames in an hour
+than `AuthPolicy.namesCheckedPerHour` (1000), whether or not they are free, as a refusal names those
+taken; a request refused for its names costs no accounts, so its correction goes through. Both are
+counted in memory, and taken usernames are refused before any password is hashed. Inviting an account you may change to a group you may change joins it at
 once too, as you agree for both sides. A username taken, or given twice, is refused naming each
 (`UsernamesTaken`).
 

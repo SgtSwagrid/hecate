@@ -78,8 +78,9 @@ for full stack websites built on Slick, Cats Effect and Laminar, and optionally 
   `decline`, and `offer`, so inviting an account one manages joins it). Every account change locks the
   user's row first, the lock `GroupStore.named` takes for kind `user`. Creating accounts needs a group
   the caller may change, is refused to guests (`GuestAccount`) and past `AuthPolicy.accountsPerHour`
-  (`AccountsCreatedRecently`, counted in memory before the names are checked, so that a refusal naming taken
-  usernames counts too), and checks names before hashing anything. Only managers who may answer an
+  (`AccountsCreatedRecently`, counted in memory only once the names are free, so that a corrected request
+  goes through), past `AuthPolicy.namesCheckedPerHour` names asked for, taken or not (as a refusal names those
+  taken), and checks names before hashing anything. Only managers who may answer an
   account's invitations (`Edit`) are told who sent them. A rename
   concerns those who see the user through groups (`GroupStore.acquaintances`), not everyone. Suspension is a table of its own,
   `suspensions` (user id only): `sessionUser` ignores a suspended user's sessions whenever they were opened,

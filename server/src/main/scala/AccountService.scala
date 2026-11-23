@@ -84,11 +84,17 @@ final class AccountService
   private val permissions = Permissions(groups, grants)
 
   /**
-    * The times, in milliseconds since the epoch, that each user lately asked
-    * for accounts to be made, with how many, kept in memory.
+    * The times, in milliseconds since the epoch, that each user lately had
+    * accounts made, with how many, kept in memory.
     */
   private val creations =
     Ref.unsafe[IO, Map[Long, List[(Long, Int)]]](Map.empty)
+
+  /**
+    * The times, in milliseconds since the epoch, that each user lately asked
+    * for accounts under some usernames, with how many, kept in memory.
+    */
+  private val checks = Ref.unsafe[IO, Map[Long, List[(Long, Int)]]](Map.empty)
 
   /**
     * Lists the accounts a user manages, holding at least [[Access.View]] over
@@ -199,12 +205,23 @@ final class AccountService
             },
           creationProblem(creation),
         )(
-          // Counted before its names are checked, as each refusal names some.
+          // The names count before they are checked, as a refusal names
+          // those taken, and the accounts only once they are free, so that a
+          // request refused for one name costs a corrected one nothing.
           mayCreate(user, owner, creation.group)
-            .flatMap(_.fold(allowed(user, creation.accounts.size))(refused =>
-              IO.pure(Some(refused)),
-            ))
+            .flatMap(
+              _.fold(allowed(checks, policy.namesCheckedPerHour)(
+                user,
+                creation.accounts.size,
+              ))(refused => IO.pure(Some(refused))),
+            )
             .flatMap(_.fold(taken(creation))(refused => IO.pure(Some(refused))))
+            .flatMap(
+              _.fold(allowed(creations, policy.accountsPerHour)(
+                user,
+                creation.accounts.size,
+              ))(refused => IO.pure(Some(refused))),
+            )
             .flatMap:
               case Some(refusal) => IO.pure(Left(refusal))
               case None          => passwordsFor(creation).flatMap(made =>
@@ -533,16 +550,22 @@ final class AccountService
     .map(held => Option.when(held.nonEmpty)(AuthRefusal.UsernamesTaken(held)))
 
   /**
-    * Counts the accounts against the user's hourly allowance, or refuses them
-    * if they would exceed it.
+    * Counts some names or accounts against the user's hourly allowance kept in
+    * the tally, or refuses them if they would exceed the limit.
     */
-  private def allowed(user: User, count: Int): IO[Option[AuthRefusal]] = IO
+  private def allowed
+    (
+      tally: Ref[IO, Map[Long, List[(Long, Int)]]],
+      limit: Int,
+    )
+    (user: User, count: Int)
+    : IO[Option[AuthRefusal]] = IO
     .realTime
     .flatMap(now =>
-      creations.modify: all =>
+      tally.modify: all =>
         val since  = now.toMillis - AuthPolicy.hourMillis
         val recent = all.getOrElse(user.id, List.empty).filter(_._1 > since)
-        if recent.map(_._2).sum + count > policy.accountsPerHour then
+        if recent.map(_._2).sum + count > limit then
           (
             all.updated(user.id, recent),
             Some(AuthRefusal.AccountsCreatedRecently(policy.accountsPerHour)),

@@ -860,6 +860,11 @@ object AuthService:
   * @param accountsPerHour
   *   The most accounts one user may create for others in an hour (see
   *   [[AccountService.create]]).
+  *
+  * @param namesCheckedPerHour
+  *   The most usernames one user may ask to create accounts under in an hour,
+  *   whether or not they are taken: as a refusal names those taken, this bounds
+  *   how fast anyone can learn which are.
   */
 final case class AuthPolicy
   (
@@ -872,6 +877,7 @@ final case class AuthPolicy
     addressMailsPerHour: Int = 5,
     guests: Boolean = false,
     accountsPerHour: Int = 300,
+    namesCheckedPerHour: Int = 1000,
   ):
 
   /** The lifetime of a session, in milliseconds. */
